@@ -1,4 +1,4 @@
-module github.com/WonderPanda/porch
+module github.com/WonderPanda/devingress
 
 go 1.27.1
 

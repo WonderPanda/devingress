@@ -1,4 +1,4 @@
-// Package config holds porch's host-level settings and filesystem locations.
+// Package config holds devingress's host-level settings and filesystem locations.
 package config
 
 import (
@@ -10,7 +10,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/WonderPanda/porch/internal/render"
+	"github.com/WonderPanda/devingress/internal/render"
 )
 
 type Config struct {
@@ -29,14 +29,14 @@ func xdg(env, fallback string) string {
 }
 
 func ConfigFile() string {
-	return filepath.Join(xdg("XDG_CONFIG_HOME", ".config"), "porch", "config.toml")
+	return filepath.Join(xdg("XDG_CONFIG_HOME", ".config"), "devingress", "config.toml")
 }
-func StateDir() string { return filepath.Join(xdg("XDG_STATE_HOME", ".local/state"), "porch") }
-func DataDir() string  { return filepath.Join(xdg("XDG_DATA_HOME", ".local/share"), "porch") }
+func StateDir() string { return filepath.Join(xdg("XDG_STATE_HOME", ".local/state"), "devingress") }
+func DataDir() string  { return filepath.Join(xdg("XDG_DATA_HOME", ".local/share"), "devingress") }
 
 func RuntimeDir() string {
 	if v := os.Getenv("XDG_RUNTIME_DIR"); v != "" {
-		return filepath.Join(v, "porch")
+		return filepath.Join(v, "devingress")
 	}
 	return filepath.Join(StateDir(), "run")
 }
@@ -76,7 +76,7 @@ func (c Config) Render() render.Options {
 }
 
 // defaultBind: loopback, plus the docker0 address when Docker is installed, so
-// containers reach porch through host.docker.internal (host-gateway) without
+// containers reach devingress through host.docker.internal (host-gateway) without
 // exposing it on the LAN.
 func defaultBind() []string {
 	bind := []string{"127.0.0.1"}
@@ -92,7 +92,7 @@ func defaultBind() []string {
 }
 
 // mkcertRoot reuses mkcert's root when one exists, so everything that already
-// trusts it (browsers, NODE_EXTRA_CA_CERTS in containers) trusts porch's certs.
+// trusts it (browsers, NODE_EXTRA_CA_CERTS in containers) trusts devingress's certs.
 func mkcertRoot() string {
 	dir := os.Getenv("CAROOT")
 	if dir == "" {

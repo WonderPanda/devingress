@@ -1,4 +1,4 @@
-// Package routefile reads a project's porch.toml and resolves it, against its
+// Package routefile reads a project's devingress.toml and resolves it, against its
 // env files and slug, into the concrete routes one owner contributes.
 package routefile
 
@@ -14,7 +14,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const DefaultName = "porch.toml"
+const DefaultName = "devingress.toml"
 
 type file struct {
 	Domain string      `toml:"domain"`
@@ -154,7 +154,7 @@ func orEmpty(err error, fallback string) string {
 }
 
 // ${NAME}: distinct from Caddy's own {$ENV} and {placeholder} syntax, so raw
-// Caddy text passes through untouched apart from porch's variables.
+// Caddy text passes through untouched apart from devingress's variables.
 var varRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 type resolver struct {

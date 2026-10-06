@@ -21,7 +21,7 @@ func write(t *testing.T, files map[string]string) string {
 func TestLoadResolvesTemplates(t *testing.T) {
 	dir := write(t, map[string]string{
 		".env.worktree": "VITE_PORT=10299\nexport MEDPLUM_PORT='10301'\n# ENABLE_MEDPLUM=false\nENABLE_MEDPLUM=true\n",
-		"porch.toml": `
+		"devingress.toml": `
 domain = "eluve.dev"
 env = [".env.worktree"]
 
@@ -92,7 +92,7 @@ to = "1"`, "must start with /"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			dir := write(t, map[string]string{"porch.toml": c.toml})
+			dir := write(t, map[string]string{"devingress.toml": c.toml})
 			_, err := Load(dir, DefaultName, "s")
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want it to mention %q", err, c.want)

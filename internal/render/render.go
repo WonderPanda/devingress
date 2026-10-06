@@ -13,7 +13,7 @@ import (
 	_ "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 
-	"github.com/WonderPanda/porch/internal/routefile"
+	"github.com/WonderPanda/devingress/internal/routefile"
 )
 
 type Options struct {
@@ -113,7 +113,7 @@ func writeProxy(b *strings.Builder, indent, upstream, retry, raw string) {
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
-// alpn maps porch's protocol names to ALPN identifiers.
+// alpn maps devingress's protocol names to ALPN identifiers.
 func alpn(protocols []string) []string {
 	out := make([]string, 0, len(protocols))
 	for _, p := range protocols {
@@ -151,7 +151,7 @@ func checkConflicts(owners []routefile.Owner) error {
 // Adapt converts the Caddyfile to JSON and provisions it without starting
 // anything, so a bad config is rejected before it reaches the running server.
 func Adapt(caddyfile string) ([]byte, error) {
-	cfgJSON, _, err := caddyconfig.GetAdapter("caddyfile").Adapt([]byte(caddyfile), map[string]any{"filename": "porch"})
+	cfgJSON, _, err := caddyconfig.GetAdapter("caddyfile").Adapt([]byte(caddyfile), map[string]any{"filename": "devingress"})
 	if err != nil {
 		return nil, err
 	}

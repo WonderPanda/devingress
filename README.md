@@ -1,15 +1,15 @@
-# porch
+# devingress
 
 One local HTTPS ingress for every project and worktree on a machine. A single
-Go binary with Caddy built in: `porch serve` owns :80/:443, and each checkout
-registers its routes from a `porch.toml` it carries.
+Go binary with Caddy built in: `devingress serve` owns :80/:443, and each checkout
+registers its routes from a `devingress.toml` it carries.
 
 ```sh
-porch serve                             # run the proxy (normally under systemd)
-porch up [dir] [--file F] [--slug S]    # register dir's routes (default ./porch.toml)
-porch down [dir]                        # remove dir's routes
-porch status                            # owners and their hosts
-porch caddyfile                         # the rendered Caddyfile, for debugging
+devingress serve                            # run the proxy (normally under systemd)
+devingress up [dir] [--file F] [--slug S]   # register dir's routes (default ./devingress.toml)
+devingress down [dir]                       # remove dir's routes
+devingress status                           # owners and their hosts
+devingress caddyfile                        # the rendered Caddyfile, for debugging
 ```
 
 ## How it works
@@ -23,16 +23,16 @@ porch caddyfile                         # the rendered Caddyfile, for debugging
   running server over the admin socket. A conflict (two owners claiming one
   host or path) or an invalid raw snippet fails that call and leaves everyone
   else's routes untouched. State is only written after the config is accepted.
-- **No daemon of porch's own.** `serve` is Caddy; the CLI reconciles
+- **No daemon of devingress's own.** `serve` is Caddy; the CLI reconciles
   synchronously under a file lock, so concurrent worktree hooks serialize.
 - **Certificates.** Caddy's internal CA issues a certificate per host. When an
   mkcert root exists (`$CAROOT` or `mkcert -CAROOT`) it signs those leaves
   directly, so anything that already trusts mkcert — browsers,
-  `NODE_EXTRA_CA_CERTS` in containers — trusts porch. One cert per host also
+  `NODE_EXTRA_CA_CERTS` in containers — trusts devingress. One cert per host also
   means browsers never coalesce connections across hosts, so pinning one host to
   HTTP/1.1 cannot affect the others.
 
-## porch.toml
+## devingress.toml
 
 ```toml
 domain = "eluve.dev"             # appended to every route host
@@ -66,13 +66,13 @@ strip = true
 proxy = 'header_down Cache-Control "max-age=45, must-revalidate"'   # raw, inside reverse_proxy
 ```
 
-porch variables are `${NAME}`; Caddy's own `{placeholder}` and `{$ENV}` syntax
+devingress variables are `${NAME}`; Caddy's own `{placeholder}` and `{$ENV}` syntax
 passes through untouched. Env files win over the process env, so a stale
 exported variable cannot silently redirect a route.
 
 ## Host config
 
-`~/.config/porch/config.toml`, all optional:
+`~/.config/devingress/config.toml`, all optional:
 
 ```toml
 bind = ["127.0.0.1", "172.17.0.1"]   # default: loopback + the docker0 address if present
@@ -81,24 +81,24 @@ https_port = 443
 ca_root = "/path/to/mkcert/root"     # default: $CAROOT or `mkcert -CAROOT`
 ```
 
-State lives in `$XDG_STATE_HOME/porch`, Caddy's storage in
-`$XDG_DATA_HOME/porch/caddy`, the admin socket in `$XDG_RUNTIME_DIR/porch`.
+State lives in `$XDG_STATE_HOME/devingress`, Caddy's storage in
+`$XDG_DATA_HOME/devingress/caddy`, the admin socket in `$XDG_RUNTIME_DIR/devingress`.
 
-DNS is not porch's job: point `*.<domain>` at 127.0.0.1 (dnsmasq, or
+DNS is not devingress's job: point `*.<domain>` at 127.0.0.1 (dnsmasq, or
 systemd-resolved forwarding to it).
 
 ## Build
 
 ```sh
-go build -o bin/porch ./cmd/porch
+go build -o bin/devingress ./cmd/devingress
 go test ./...
 ```
 
 Binding :80/:443 as a normal user needs
-`sudo setcap cap_net_bind_service=+ep bin/porch` (lost on every rebuild).
+`sudo setcap cap_net_bind_service=+ep bin/devingress` (lost on every rebuild).
 
 ## Not yet
 
-- `porch install`: systemd user unit + the setcap step.
+- `devingress install`: systemd user unit + the setcap step.
 - Binding the docker0 address fails if Docker is not up when `serve` starts.
 - The binary carries all of Caddy's standard modules (~80 MB).

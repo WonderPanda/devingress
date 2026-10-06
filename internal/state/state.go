@@ -1,5 +1,5 @@
 // Package state stores each registered owner's resolved routes, one JSON file
-// per owner directory, under a lock shared by every porch invocation.
+// per owner directory, under a lock shared by every devingress invocation.
 package state
 
 import (
@@ -11,7 +11,7 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/WonderPanda/porch/internal/routefile"
+	"github.com/WonderPanda/devingress/internal/routefile"
 )
 
 type Store struct{ dir string }
@@ -25,7 +25,7 @@ func key(ownerDir string) string {
 	return hex.EncodeToString(sum[:6])
 }
 
-// Lock serializes porch invocations: worktree hooks run concurrently, and two
+// Lock serializes devingress invocations: worktree hooks run concurrently, and two
 // interleaved reconciles would each drop the other's owner.
 func (s Store) Lock() (unlock func(), err error) {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {

@@ -1,4 +1,4 @@
-// porch: one local HTTPS ingress for every project and worktree on a machine.
+// devingress: one local HTTPS ingress for every project and worktree on a machine.
 package main
 
 import (
@@ -8,19 +8,19 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/WonderPanda/porch/internal/config"
-	"github.com/WonderPanda/porch/internal/porch"
-	"github.com/WonderPanda/porch/internal/routefile"
-	"github.com/WonderPanda/porch/internal/state"
+	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/ingress"
+	"github.com/WonderPanda/devingress/internal/routefile"
+	"github.com/WonderPanda/devingress/internal/state"
 )
 
-const usage = `porch: local HTTPS routing for projects and worktrees
+const usage = `devingress: local HTTPS routing for projects and worktrees
 
-  porch serve                         run the proxy (normally under systemd)
-  porch up [dir] [--file F] [--slug S]   register dir's routes (default ./porch.toml)
-  porch down [dir]                    remove dir's routes
-  porch status                        list owners and their hosts
-  porch caddyfile                     print the rendered Caddyfile
+  devingress serve                             run the proxy (normally under systemd)
+  devingress up [dir] [--file F] [--slug S]    register dir's routes (default ./devingress.toml)
+  devingress down [dir]                        remove dir's routes
+  devingress status                            list owners and their hosts
+  devingress caddyfile                         print the rendered Caddyfile
 
 Every up/down also drops routes whose owner directory no longer exists.
 `
@@ -33,7 +33,7 @@ func main() {
 	var err error
 	switch cmd, args := os.Args[1], os.Args[2:]; cmd {
 	case "serve":
-		err = porch.Serve()
+		err = ingress.Serve()
 	case "up":
 		err = up(args)
 	case "down":
@@ -42,17 +42,17 @@ func main() {
 		err = status()
 	case "caddyfile":
 		var text string
-		if text, err = porch.Caddyfile(); err == nil {
+		if text, err = ingress.Caddyfile(); err == nil {
 			fmt.Print(text)
 		}
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "porch: unknown command %q\n\n%s", cmd, usage)
+		fmt.Fprintf(os.Stderr, "devingress: unknown command %q\n\n%s", cmd, usage)
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "porch: %v\n", err)
+		fmt.Fprintf(os.Stderr, "devingress: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -100,7 +100,7 @@ func up(args []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := porch.Reconcile(func(owners []routefile.Owner) []routefile.Owner {
+	res, err := ingress.Reconcile(func(owners []routefile.Owner) []routefile.Owner {
 		owners = slices.DeleteFunc(owners, func(o routefile.Owner) bool { return o.Dir == dir })
 		return append(owners, owner)
 	})
@@ -124,7 +124,7 @@ func down(args []string) error {
 		return err
 	}
 	found := false
-	res, err := porch.Reconcile(func(owners []routefile.Owner) []routefile.Owner {
+	res, err := ingress.Reconcile(func(owners []routefile.Owner) []routefile.Owner {
 		return slices.DeleteFunc(owners, func(o routefile.Owner) bool {
 			found = found || o.Dir == dir
 			return o.Dir == dir
@@ -142,12 +142,12 @@ func down(args []string) error {
 	return nil
 }
 
-func report(res porch.Result) {
+func report(res ingress.Result) {
 	for _, d := range res.Pruned {
 		fmt.Printf("  pruned %s (directory is gone)\n", d)
 	}
 	if !res.Applied {
-		fmt.Println("  porch is not serving; routes apply when `porch serve` starts")
+		fmt.Println("  devingress is not serving; routes apply when `devingress serve` starts")
 	}
 }
 
@@ -156,7 +156,7 @@ func status() error {
 	if err != nil {
 		return err
 	}
-	if porch.Running() {
+	if ingress.Running() {
 		fmt.Printf("serving (admin %s)\n", config.AdminSocket())
 	} else {
 		fmt.Println("not serving")

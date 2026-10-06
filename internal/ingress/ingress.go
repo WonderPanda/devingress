@@ -1,6 +1,6 @@
-// Package porch reconciles registered owners into the running server and runs
+// Package ingress reconciles registered owners into the running server and runs
 // that server.
-package porch
+package ingress
 
 import (
 	"bytes"
@@ -16,10 +16,10 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 
-	"github.com/WonderPanda/porch/internal/config"
-	"github.com/WonderPanda/porch/internal/render"
-	"github.com/WonderPanda/porch/internal/routefile"
-	"github.com/WonderPanda/porch/internal/state"
+	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/render"
+	"github.com/WonderPanda/devingress/internal/routefile"
+	"github.com/WonderPanda/devingress/internal/state"
 )
 
 type Result struct {
@@ -151,7 +151,7 @@ func load(cfgJSON []byte) error {
 // Serve runs Caddy with every live owner's routes until SIGINT/SIGTERM.
 func Serve() error {
 	if Running() {
-		return fmt.Errorf("porch is already serving on %s", config.AdminSocket())
+		return fmt.Errorf("devingress is already serving on %s", config.AdminSocket())
 	}
 	if sock := config.AdminSocket(); len(sock) > 107 {
 		return fmt.Errorf("admin socket path %s is %d bytes; Unix sockets allow 107 (set a shorter XDG_RUNTIME_DIR)", sock, len(sock))
