@@ -1,104 +1,140 @@
 # devingress
 
-One local HTTPS ingress for every project and worktree on a machine. A single
-Go binary with Caddy built in: `devingress serve` owns :80/:443, and each checkout
-registers its routes from a `devingress.toml` it carries.
+Stable HTTPS URLs for every local dev server, across every project and git
+worktree on your machine.
+
+```
+https://web-my-branch.example.dev     -> 127.0.0.1:10299
+https://api-my-branch.example.dev     -> 127.0.0.1:10298
+https://web-other-branch.example.dev  -> 127.0.0.1:11420
+```
+
+One process owns ports 80 and 443. Each checkout carries a `devingress.toml`
+describing the routes it needs and registers them with `devingress up`; they
+disappear when the checkout does. It's a single Go binary with
+[Caddy](https://caddyserver.com) built in: no Docker, no separate proxy to
+configure.
+
+## Why
+
+Running several worktrees of the same app at once means each one needs its own
+ports, its own hostnames, and real TLS (cookies, OAuth redirects, service
+workers and `wss://` all behave differently over plain HTTP). Hand-maintained
+proxy configs drift, and a deleted worktree leaves routes pointing at nothing.
+devingress makes the routes part of the checkout.
+
+## Install
 
 ```sh
-devingress serve                            # run the proxy (normally under systemd)
-devingress up [dir] [--file F] [--slug S]   # register dir's routes (default ./devingress.toml)
-devingress down [dir]                       # remove dir's routes
-devingress status                           # owners and their hosts
-devingress caddyfile                        # the rendered Caddyfile, for debugging
+go install github.com/WonderPanda/devingress/cmd/devingress@latest
+
+# Let it bind :80/:443 as your user (repeat after every reinstall)
+sudo setcap cap_net_bind_service=+ep "$(go env GOPATH)/bin/devingress"
 ```
+
+Run it as a systemd user service:
+
+```ini
+# ~/.config/systemd/user/devingress.service
+[Unit]
+Description=devingress local HTTPS ingress
+
+[Service]
+ExecStart=%h/go/bin/devingress serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user enable --now devingress
+```
+
+**Certificates:** if you use [mkcert](https://github.com/FiloSottile/mkcert)
+(`mkcert -install`), devingress signs with its root, so your browser and
+anything else that already trusts mkcert trusts devingress.
+
+**DNS:** point your dev domain at `127.0.0.1`, e.g. with dnsmasq
+`address=/example.dev/127.0.0.1`. Or use `*.localhost`, which most browsers and
+curl already resolve to loopback.
+
+## Usage
+
+Add a `devingress.toml` to your project:
+
+```toml
+domain = "example.dev"
+env = [".env.local"]             # ${VARS} come from here, then the environment
+
+[[route]]
+host = "web-${slug}"             # ${slug} = the current git branch, slugified
+to = "${WEB_PORT}"               # a bare port means 127.0.0.1:<port>
+retry = "5s"                     # ride out dev-server restarts instead of 502ing
+
+[[route]]
+host = "api-${slug}"
+to = "${API_PORT}"
+```
+
+Then, from the checkout or your worktree setup/teardown hooks:
+
+```sh
+devingress up          # register this checkout's routes
+devingress down        # remove them
+devingress status      # every registered checkout and its URLs
+```
+
+Every `up`/`down` also removes the routes of checkouts that no longer exist, so
+a worktree deleted with `rm -rf` is cleaned up on the next call.
+
+### Beyond host-to-port
+
+```toml
+[[route]]
+host = "realtime-${slug}"
+to = "${REALTIME_PORT}"
+when = "${ENABLE_REALTIME}"      # skip unless 1/true/yes/on
+protocols = ["h1"]               # pin ALPN for this host only
+caddy = '''                      # raw Caddyfile site body for anything else
+header Access-Control-Allow-Origin "{http.request.header.Origin}"
+reverse_proxy ${upstream}
+'''
+
+[[path]]                         # plain-HTTP path routes, for containers that
+prefix = "/auth-${slug}"         # call host.docker.internal instead of a hostname
+to = "${AUTH_PORT}"
+strip = true
+proxy = 'header_down Cache-Control "max-age=45"'   # raw, inside reverse_proxy
+```
+
+devingress variables are `${NAME}`; Caddy's own `{placeholder}` syntax passes
+through untouched.
 
 ## How it works
 
-- **Owners.** Routes belong to the directory that registered them. Every
-  `up`/`down` drops the routes of owners whose directory no longer exists, so a
-  worktree deleted with `rm -rf` or `git worktree remove` loses its routes on the
-  next call without any teardown hook having run.
-- **Validate before apply.** Each call renders every live owner into one
-  Caddyfile, adapts and provisions it in-process, and only then loads it into the
-  running server over the admin socket. A conflict (two owners claiming one
-  host or path) or an invalid raw snippet fails that call and leaves everyone
-  else's routes untouched. State is only written after the config is accepted.
-- **No daemon of devingress's own.** `serve` is Caddy; the CLI reconciles
-  synchronously under a file lock, so concurrent worktree hooks serialize.
-- **Certificates.** Caddy's internal CA issues a certificate per host. When an
-  mkcert root exists (`$CAROOT` or `mkcert -CAROOT`) it signs those leaves
-  directly, so anything that already trusts mkcert — browsers,
-  `NODE_EXTRA_CA_CERTS` in containers — trusts devingress. One cert per host also
-  means browsers never coalesce connections across hosts, so pinning one host to
-  HTTP/1.1 cannot affect the others.
+- Each `up`/`down` merges every live checkout's routes into one config and
+  validates it with Caddy before touching the running server. A bad snippet, or
+  two checkouts claiming the same host, fails that command while everyone
+  else's routes keep serving.
+- Calls are serialized with a file lock, so parallel worktree hooks are safe.
+- Each host gets its own certificate, so pinning one host to HTTP/1.1 can't
+  affect connections to the others.
 
-## devingress.toml
+Optional host settings live in `~/.config/devingress/config.toml`:
 
 ```toml
-domain = "eluve.dev"             # appended to every route host
-env = [".env.worktree"]          # ${VARS} resolve from these, then the process env
-
-[[route]]
-host = "web-${slug}"             # ${slug}: --slug, else the git branch slugified
-to = "${VITE_DEV_PORT}"          # bare port = 127.0.0.1:<port>; otherwise passed to Caddy as-is
-retry = "5s"                     # retry refused connections (dev servers restarting)
-
-[[route]]
-host = "medplum-${slug}"
-to = "${MEDPLUM_HOST_PORT}"
-when = "${ENABLE_MEDPLUM}"       # 1/true/yes/on; unset = off
-protocols = ["h1"]               # ALPN pin
-caddy = '''                      # raw site body; replaces the generated reverse_proxy
-@options method OPTIONS
-handle @options {
-	header Access-Control-Allow-Origin "{http.request.header.Origin}"
-	respond 204
-}
-reverse_proxy ${upstream} {
-	header_down -Access-Control-Allow-Origin
-}
-'''
-
-[[path]]                         # on the plain-HTTP listener, for containers
-prefix = "/supertokens-${slug}"  # calling host.docker.internal:80
-to = "${SUPERTOKENS_HOST_PORT}"
-strip = true
-proxy = 'header_down Cache-Control "max-age=45, must-revalidate"'   # raw, inside reverse_proxy
-```
-
-devingress variables are `${NAME}`; Caddy's own `{placeholder}` and `{$ENV}` syntax
-passes through untouched. Env files win over the process env, so a stale
-exported variable cannot silently redirect a route.
-
-## Host config
-
-`~/.config/devingress/config.toml`, all optional:
-
-```toml
-bind = ["127.0.0.1", "172.17.0.1"]   # default: loopback + the docker0 address if present
+bind = ["127.0.0.1", "172.17.0.1"]   # default: loopback + docker0 if present
 http_port = 80
 https_port = 443
-ca_root = "/path/to/mkcert/root"     # default: $CAROOT or `mkcert -CAROOT`
+ca_root = "/path/to/ca"              # default: mkcert's CAROOT
 ```
 
-State lives in `$XDG_STATE_HOME/devingress`, Caddy's storage in
-`$XDG_DATA_HOME/devingress/caddy`, the admin socket in `$XDG_RUNTIME_DIR/devingress`.
+`devingress caddyfile` prints the generated Caddy config.
 
-DNS is not devingress's job: point `*.<domain>` at 127.0.0.1 (dnsmasq, or
-systemd-resolved forwarding to it).
+## Status
 
-## Build
-
-```sh
-go build -o bin/devingress ./cmd/devingress
-go test ./...
-```
-
-Binding :80/:443 as a normal user needs
-`sudo setcap cap_net_bind_service=+ep bin/devingress` (lost on every rebuild).
-
-## Not yet
-
-- `devingress install`: systemd user unit + the setcap step.
-- Binding the docker0 address fails if Docker is not up when `serve` starts.
-- The binary carries all of Caddy's standard modules (~80 MB).
+Early, and only run on Linux so far. There's no `devingress install` command
+yet, and `serve` can't bind the docker0 address until Docker is up (the unit's
+`Restart=on-failure` retries until it is).
