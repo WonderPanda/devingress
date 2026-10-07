@@ -22,21 +22,23 @@ Flags:
   --host H    only the site whose host is exactly H
   --json      print a JSON array instead, one object per route (below)
 
-Reads only the state dir: no lock and no admin socket, so it works whether or not serve is
-running. It shows what the last up or down registered; serve must be running for the URLs to
-answer.
+Reads the state dir and config.toml: no lock and no admin socket, so it works whether or not
+serve is running. It shows what the last up or down registered; serve must be running for the
+URLs to answer.
 
 JSON fields, always present:
   site  {"kind": "site", "url", "host", "upstream", "retry", "protocols", "dir", "file", "slug",
          "gone"}
   path  {"kind": "path", "prefix", "upstream", "strip", "dir", "file", "slug", "gone"}
-  url is "https://<host>"; add ":<https_port>" if config.toml sets one other than 443. retry is
-  "" when unset, protocols a list ([] for the default h1 and h2), strip and gone booleans. dir
-  is the owner's directory, file its route file and slug its ${slug}. No match prints [].
+  url is ready to use: "https://<host>", plus ":<https_port>" when config.toml sets one other
+  than 443. retry is "" when unset, protocols a list ([] for the default h1 and h2), strip and
+  gone booleans. dir is the owner's directory, file its route file and slug its ${slug}. No
+  match prints [].
 
 Exit codes:
   0  printed; with no filter, an empty registry prints nothing (or [])
-  1  --dir or --host matched nothing (reason on stderr), or the state dir could not be read
+  1  --dir or --host matched nothing (reason on stderr), or the state dir or config.toml could
+     not be read
   2  bad flag or argument
 
 Examples:
@@ -87,6 +89,11 @@ func routes(args []string, stdout io.Writer) error {
 		}
 	}
 
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
 	owners, err := state.New(config.StateDir()).List()
 	if err != nil {
 		return err
@@ -102,7 +109,7 @@ func routes(args []string, stdout io.Writer) error {
 			if *host != "" && s.Host != *host {
 				continue
 			}
-			sites = append(sites, siteRoute{Kind: "site", URL: "https://" + s.Host, Host: s.Host, Upstream: s.Upstream,
+			sites = append(sites, siteRoute{Kind: "site", URL: siteURL(s.Host, cfg.HTTPSPort), Host: s.Host, Upstream: s.Upstream,
 				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: gone})
 		}
 		if *host != "" {
@@ -154,6 +161,13 @@ func routes(args []string, stdout io.Writer) error {
 		return fmt.Errorf("no site has host %s", *host)
 	}
 	return nil
+}
+
+func siteURL(host string, httpsPort int) string {
+	if httpsPort == 443 {
+		return "https://" + host
+	}
+	return fmt.Sprintf("https://%s:%d", host, httpsPort)
 }
 
 func goneMark(gone bool) string {

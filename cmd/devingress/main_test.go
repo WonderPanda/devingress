@@ -314,6 +314,25 @@ func TestRoutesMiss(t *testing.T) {
 	}
 }
 
+func TestRoutesHTTPSPort(t *testing.T) {
+	root, _, _, _ := checkouts(t)
+	confDir := filepath.Join(root, "xdg_config_home", "devingress")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(confDir, "config.toml"), []byte("https_port = 8443\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routes := routesJSON(t, 0, "--host", "web-feat.example.dev")
+	if len(routes) != 1 || *routes[0].URL != "https://web-feat.example.dev:8443" {
+		t.Errorf("--json with https_port 8443: %+v", routes)
+	}
+	code, stdout, _ := runCLI(t, "routes", "--host", "web-feat.example.dev")
+	if code != 0 || strings.Fields(stdout)[0] != "https://web-feat.example.dev:8443" {
+		t.Errorf("text with https_port 8443: exit %d\n%s", code, stdout)
+	}
+}
+
 func TestRoutesEmptyRegistry(t *testing.T) {
 	isolate(t)
 	code, stdout, stderr := runCLI(t, "routes", "--json")
