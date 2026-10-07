@@ -77,6 +77,68 @@ func TestALPN(t *testing.T) {
 	}
 }
 
+// TestDoctor checks `devingress doctor --json` against the harness's live instance: serve, ports
+// and the TLS half of the per-host check should all pass, while the DNS half fails because the
+// harness's domain never resolves anywhere, which must also make the exit code 1.
+func TestDoctor(t *testing.T) {
+	roots := pool(t, filepath.Join(caDir, "rootCA.pem"))
+	srv.waitServes(t, roots, webHost)
+	srv.waitServes(t, roots, h1Host)
+
+	out, err := srv.run(mainDir, "doctor", "--json")
+	if err == nil {
+		t.Fatalf("doctor --json: exit 0, want 1 (the harness's domain never resolves)\n%s", out)
+	}
+	var checks []struct {
+		Check   string `json:"check"`
+		Subject string `json:"subject"`
+		Status  string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(out), &checks); err != nil {
+		t.Fatalf("doctor --json: %v\n%s", err, out)
+	}
+
+	byCheck := map[string][]string{}
+	for _, c := range checks {
+		byCheck[c.Check] = append(byCheck[c.Check], c.Status)
+	}
+	for _, name := range []string{"serve", "ports"} {
+		if len(byCheck[name]) == 0 {
+			t.Errorf("no %s checks in:\n%s", name, out)
+		}
+		for _, status := range byCheck[name] {
+			if status != "ok" {
+				t.Errorf("%s: want every status ok, got %v", name, byCheck[name])
+			}
+		}
+	}
+
+	hosts := map[string][]string{}
+	for _, c := range checks {
+		if c.Check == "host" {
+			hosts[c.Subject] = append(hosts[c.Subject], c.Status)
+		}
+	}
+	for _, host := range []string{webHost, h1Host} {
+		got := hosts[host]
+		if len(got) != 2 {
+			t.Fatalf("host %s: %d entries, want 2 (DNS and TLS):\n%s", host, len(got), out)
+		}
+		oks, fails := 0, 0
+		for _, status := range got {
+			switch status {
+			case "ok":
+				oks++
+			case "fail":
+				fails++
+			}
+		}
+		if oks != 1 || fails != 1 {
+			t.Errorf("host %s: statuses %v, want exactly one ok (TLS) and one fail (DNS)", host, got)
+		}
+	}
+}
+
 // TestRoutesURLsConnect checks that `routes --json` prints URLs that are
 // ready to use as-is, on an instance whose https_port is not 443 (the
 // harness always picks a free port, so this covers that bug by construction).
