@@ -1,7 +1,7 @@
 # devingress
 
-Stable HTTPS URLs for every local dev server, across every project and git
-worktree on your machine.
+Per-worktree HTTPS hostnames for multi-service stacks that your own scripts and
+hooks start.
 
 ```
 https://web-my-branch.example.dev     -> 127.0.0.1:10299
@@ -15,62 +15,45 @@ disappear when the checkout does. It's a single Go binary with
 [Caddy](https://caddyserver.com) built in: no Docker, no separate proxy to
 configure.
 
+**Early, and Linux-only so far.** You need a Go toolchain to install it,
+[mkcert](https://github.com/FiloSottile/mkcert) for certificates your browser
+trusts, and DNS for your dev domain (or `*.localhost`).
+
 ## Why
 
 Running several worktrees of the same app at once means each one needs its own
-ports, its own hostnames, and real TLS (cookies, OAuth redirects, service
-workers and `wss://` all behave differently over plain HTTP). Hand-maintained
-proxy configs drift, and a deleted worktree leaves routes pointing at nothing.
-devingress makes the routes part of the checkout.
+ports, its own hostnames, and real TLS: cookies, OAuth redirects, service
+workers and `wss://` all behave differently over plain HTTP. When a setup hook
+starts the stack (allocating ports, writing env files, running Docker Compose),
+the proxy routes have to come from that same hook and go away with the
+worktree.
 
-## Compared to portless
+### Why not a Caddyfile with `import worktrees/*.caddy`?
 
-[portless](https://github.com/vercel-labs/portless) is the better fit when your
-app is a dev server it can launch: `portless run next dev` picks a port, serves
-`https://myapp.localhost`, adds the branch as a subdomain in a linked worktree,
-and drops the route when the process exits. No config and no hooks.
+That's where devingress started. Each hook writes a snippet, Caddy reloads, and
+it works until:
 
-devingress is for stacks where something else starts the services, typically a
-worktree setup hook that allocates ports, writes env files and runs Docker
-Compose. portless reaches those services through static aliases, so the hooks
-end up maintaining the route list by hand:
+- **One bad snippet blocks everyone.** Caddy rejects the whole config if any
+  snippet is invalid or two worktrees claim the same host, so nobody's new
+  routes apply until someone finds the culprit. devingress validates the merged
+  config before applying it and fails only the command that caused the problem,
+  naming both owners on a conflict.
+- **Deleted worktrees leave routes behind.** A worktree removed with `rm -rf`
+  or `git worktree remove` never runs its teardown hook. On every `up`/`down`,
+  devingress drops the routes of any checkout whose directory is gone.
+- **Parallel hooks race.** Two worktrees set up at once both rewrite and reload.
+  devingress serializes calls with a file lock.
+- **Snippets come from shell heredocs.** devingress reads a committed TOML file
+  with `${VARS}` from your env files, and still lets a route drop down to raw
+  Caddy when it needs to.
 
-```sh
-# setup hook: one line per service, branch added by hand
-portless alias "api-$BRANCH"  "$API_PORT"
-portless alias "auth-$BRANCH" "$AUTH_PORT"
-# ...
+### devingress or portless?
 
-# teardown hook: the same list again
-portless alias --remove "api-$BRANCH"
-portless alias --remove "auth-$BRANCH"
-# ...
-```
-
-Aliases are never removed automatically, so a worktree deleted without running
-its teardown hook leaves its routes behind. With devingress the services are
-listed once, in a committed `devingress.toml` that reads ports from the env
-file setup already writes, and the hooks shrink to one line. With
-[worktrunk](https://github.com/max-sixty/worktrunk):
-
-```toml
-pre-remove = "devingress down"   # optional: routes of deleted checkouts are dropped on the next call
-
-[[pre-start]]
-routes = "devingress up"
-```
-
-| | portless | devingress |
-|---|---|---|
-| Services it doesn't launch | One `alias` per service in setup, one `--remove` per service in teardown | Listed once in `devingress.toml`; `devingress up` in setup |
-| Cleanup | Launched apps: when the process exits. Aliases: only when removed | When the checkout's directory is gone, on the next `up`/`down` |
-| Ports | Picked from 4000–4999 when the app launches. Fine for traffic through the proxy, but anything that bypasses it (containers calling `host.docker.internal:<port>`, plain-HTTP server-to-server calls) needs the port at setup time, which means pinning `--app-port` per worktree and allocating ports yourself | Allocated once by your setup; env files, Docker Compose and `devingress.toml` all read the same values |
-| Hostnames | `<branch>.<app>.localhost`, so existing names in env files, CORS allowlists, cookie domains and OAuth redirect URIs have to be renamed. `portless get` prints the URL ahead of time for wiring | Any template, e.g. `web-${slug}.example.dev`, so existing names stay as they are. `devingress routes --json` lists the registered URLs |
-| Per-route settings | App name, script and port | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
-| Runtime | Node.js 24+, installed with npm | One Go binary |
-
-Both bind ports 80 and 443, so run one per machine, or move devingress with
-`http_port`/`https_port` in its host config.
+Use [portless](https://github.com/vercel-labs/portless) if your app is a dev
+server it can launch: no config, no hooks, and it runs on macOS and Windows.
+Use devingress if something else starts your services, decides their ports, and
+already expects particular hostnames. See the
+[full comparison](#compared-to-portless).
 
 ## Install
 
@@ -101,9 +84,9 @@ WantedBy=default.target
 systemctl --user enable --now devingress
 ```
 
-**Certificates:** if you use [mkcert](https://github.com/FiloSottile/mkcert)
-(`mkcert -install`), devingress signs with its root, so your browser and
-anything else that already trusts mkcert trusts devingress.
+**Certificates:** run `mkcert -install` once. devingress signs with mkcert's
+root, so your browser and anything else that already trusts mkcert trusts
+devingress.
 
 **DNS:** point your dev domain at `127.0.0.1`, e.g. with dnsmasq
 `address=/example.dev/127.0.0.1`. Or use `*.localhost`, which most browsers and
@@ -127,7 +110,7 @@ host = "api-${slug}"
 to = "${API_PORT}"
 ```
 
-Then, from the checkout or your worktree setup/teardown hooks:
+Then, from the checkout or your worktree hooks:
 
 ```sh
 devingress up          # register this checkout's routes
@@ -136,8 +119,14 @@ devingress status      # every registered checkout and its URLs
 devingress routes      # every registered route; --dir . for this checkout's, --json for scripts
 ```
 
-Every `up`/`down` also removes the routes of checkouts that no longer exist, so
-a worktree deleted with `rm -rf` is cleaned up on the next call.
+With [worktrunk](https://github.com/max-sixty/worktrunk), that's:
+
+```toml
+pre-remove = "devingress down"   # optional: deleted checkouts are pruned on the next call anyway
+
+[[pre-start]]
+routes = "devingress up"
+```
 
 ### Beyond host-to-port
 
@@ -160,22 +149,15 @@ proxy = 'header_down Cache-Control "max-age=45"'   # raw, inside reverse_proxy
 ```
 
 devingress variables are `${NAME}`; Caddy's own `{placeholder}` syntax passes
-through untouched.
+through untouched. Each host gets its own certificate, so pinning one host to
+HTTP/1.1 can't affect connections to the others.
 
 `devingress help routefile` prints the full `devingress.toml` reference, and
 `devingress help <command>` each command's flags, files and exit codes.
 
-## How it works
+### Host settings
 
-- Each `up`/`down` merges every live checkout's routes into one config and
-  validates it with Caddy before touching the running server. A bad snippet, or
-  two checkouts claiming the same host, fails that command while everyone
-  else's routes keep serving.
-- Calls are serialized with a file lock, so parallel worktree hooks are safe.
-- Each host gets its own certificate, so pinning one host to HTTP/1.1 can't
-  affect connections to the others.
-
-Optional host settings live in `~/.config/devingress/config.toml`:
+Optional, in `~/.config/devingress/config.toml`:
 
 ```toml
 bind = ["127.0.0.1", "172.17.0.1"]   # default: loopback + docker0 if present
@@ -186,8 +168,33 @@ ca_root = "/path/to/ca"              # default: mkcert's CAROOT
 
 `devingress caddyfile` prints the generated Caddy config.
 
+## Compared to portless
+
+portless is a launcher: `portless run next dev` picks a port, serves
+`https://myapp.localhost`, adds the branch as a subdomain in a linked worktree,
+and drops the route when the process exits. Services it doesn't launch, such as
+anything Docker Compose starts, are registered with `portless alias <name>
+<port>` in a setup hook and removed with `portless alias --remove <name>` in
+teardown. Aliases are never removed automatically, so a worktree deleted
+without its teardown hook leaves them behind.
+
+| | portless | devingress |
+|---|---|---|
+| Services it doesn't launch | An `alias` per service in setup and a `--remove` per service in teardown | Listed once in `devingress.toml`; `devingress up` in setup |
+| Cleanup | Launched apps: when the process exits. Aliases: only when removed | When the checkout's directory is gone, on the next `up`/`down` |
+| Ports | Picked from 4000–4999 when an app launches. Fine through the proxy, but traffic that bypasses it (containers calling `host.docker.internal:<port>`, plain-HTTP server-to-server calls) needs the port at setup time, which means pinning `--app-port` per worktree | Allocated by your setup; env files, Docker Compose and `devingress.toml` all read the same values |
+| Hostnames | Launched apps get `<branch>.<app>.<tld>`. Aliases take any name and `--tld` accepts a domain you own, so existing names can be kept by aliasing each one. `portless get <name>` (in its CLI help) prints an app's URL for wiring | Any template, e.g. `web-${slug}.example.dev`, from one file. `devingress routes --json` lists the registered URLs |
+| Per-route settings | App name, script and port | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
+| Certificates and DNS | Creates and trusts its own CA; keeps `/etc/hosts` in sync | Uses mkcert's root; DNS is yours to set up |
+| Running at boot | `portless service install` | A systemd unit you write (above) |
+| Platforms | macOS, Linux, Windows, WSL | Linux only so far |
+| Install | `npm install -g portless` (Node.js 24+) | `go install` (Go toolchain); no prebuilt binaries yet |
+
+Both use port 443 by default, so run one per machine, or move devingress with
+`https_port`/`http_port` in its host settings.
+
 ## Status
 
-Early, and only run on Linux so far. There's no `devingress install` command
-yet, and `serve` can't bind the docker0 address until Docker is up (the unit's
-`Restart=on-failure` retries until it is).
+Early. There's no `devingress install` command yet, and `serve` can't bind the
+docker0 address until Docker is up (the unit's `Restart=on-failure` retries
+until it is).
