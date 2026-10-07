@@ -25,27 +25,52 @@ devingress makes the routes part of the checkout.
 
 ## Compared to portless
 
-[portless](https://github.com/vercel-labs/portless) solves the same problem with
-less setup, and if it fits your stack, use it: `portless run next dev` starts
-your dev server on a free port and serves it at `https://myapp.localhost`, with
-the branch added as a subdomain in linked worktrees.
+[portless](https://github.com/vercel-labs/portless) is the better fit when your
+app is a dev server it can launch: `portless run next dev` picks a port, serves
+`https://myapp.localhost`, adds the branch as a subdomain in a linked worktree,
+and drops the route when the process exits. No config and no hooks.
 
-devingress exists for stacks that don't fit that model:
+devingress is for stacks where something else starts the services, typically a
+worktree setup hook that allocates ports, writes env files and runs Docker
+Compose. portless reaches those services through static aliases, so the hooks
+end up maintaining the route list by hand:
+
+```sh
+# setup hook: one line per service, branch added by hand
+portless alias "api-$BRANCH"  "$API_PORT"
+portless alias "auth-$BRANCH" "$AUTH_PORT"
+# ...
+
+# teardown hook: the same list again
+portless alias --remove "api-$BRANCH"
+portless alias --remove "auth-$BRANCH"
+# ...
+```
+
+Aliases are never removed automatically, so a worktree deleted without running
+its teardown hook leaves its routes behind. With devingress the services are
+listed once, in a committed `devingress.toml` that reads ports from the env
+file setup already writes, and the hooks shrink to one line. With
+[worktrunk](https://github.com/max-sixty/worktrunk):
+
+```toml
+pre-remove = "devingress down"   # optional: routes of deleted checkouts are dropped on the next call
+
+[[pre-start]]
+routes = "devingress up"
+```
 
 | | portless | devingress |
 |---|---|---|
-| What creates a route | Starting your dev server through `portless`, which picks a port and passes it as `PORT`; `portless alias` for anything else | A `devingress.toml` in the checkout. Processes start however they already do (scripts, Docker Compose, a process manager) on ports you choose |
-| Hostnames | `<branch>.<app>.localhost` (configurable TLD) | Any template, e.g. `web-${slug}.example.dev`, so they match the names your env files, CORS allowlists and cookie domains already use |
-| Per-route settings | App name, script and port (`portless.json`) | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
+| Services it doesn't launch | One `alias` per service in setup, one `--remove` per service in teardown | Listed once in `devingress.toml`; `devingress up` in setup |
+| Cleanup | Launched apps: when the process exits. Aliases: only when removed | When the checkout's directory is gone, on the next `up`/`down` |
+| Ports | Picked at launch unless pinned with `appPort` (`portless get` prints the URL ahead of time) | Yours, read from your env files |
+| Hostnames | `<branch>.<app>.localhost`; an alias is exactly the name given | Any template, e.g. `web-${slug}.example.dev`, to match names your config already uses |
+| Per-route settings | App name, script and port | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
 | Runtime | Node.js 24+, installed with npm | One Go binary |
 
-It was built for a stack that already had a hostname scheme wired into its env
-files and auth config, an API whose CORS preflights have to be answered at the
-proxy, and containers that fetch auth keys through a path route on port 80.
-None of those can be expressed as an app name and a port.
-
-Both bind ports 80 and 443, so run one per machine, or move one with
-`https_port`/`http_port` in devingress's host config.
+Both bind ports 80 and 443, so run one per machine, or move devingress with
+`http_port`/`https_port` in its host config.
 
 ## Install
 
