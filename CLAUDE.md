@@ -6,12 +6,14 @@ the route file format.
 
 ## Layout
 
-- `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `caddyfile`, `trust`), each
-  command's help text next to it. `devingress help routefile` lives in `internal/routefile/help.go`.
+- `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `caddyfile`, `trust`,
+  `service`), each command's help text next to it. `devingress help routefile` lives in
+  `internal/routefile/help.go`.
 - `internal/routefile/`: parses `devingress.toml` and expands `${VARS}`.
 - `internal/render/`: merges every owner's routes into one Caddy config.
 - `internal/state/`: one JSON file per registered checkout, under `$XDG_STATE_HOME/devingress`.
 - `internal/ingress/`: runs Caddy and reloads it through the admin socket.
+- `internal/service/`: the systemd system unit `devingress service install` writes, and its commands.
 - `internal/config/`: host settings (`~/.config/devingress/config.toml`) and the XDG paths.
 
 ## Commands
@@ -41,6 +43,8 @@ Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e
   printf 'bind = ["127.0.0.1"]\nhttp_port = 18080\nhttps_port = 18443\n' > $XDG_CONFIG_HOME/devingress/config.toml
   ```
 - Never run `sudo` or `setcap`.
+- Never run `devingress service install` or `uninstall` without `--print`: they run `sudo`,
+  `systemctl` and `loginctl`.
 
 ## Pull requests
 
