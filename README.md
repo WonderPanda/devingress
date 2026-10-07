@@ -68,6 +68,7 @@ routes = "devingress up"
 | Hostnames | `<branch>.<app>.localhost`, so existing names in env files, CORS allowlists, cookie domains and OAuth redirect URIs have to be renamed. `portless get` prints the URL ahead of time for wiring | Any template, e.g. `web-${slug}.example.dev`, so existing names stay as they are. `devingress routes --json` lists the registered URLs |
 | Per-route settings | App name, script and port | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
 | Runtime | Node.js 24+, installed with npm | One Go binary |
+| Running at boot | `portless service install` | `devingress service install` |
 
 Both bind ports 80 and 443, so run one per machine, or move devingress with
 `http_port`/`https_port` in its host config.
@@ -77,29 +78,22 @@ Both bind ports 80 and 443, so run one per machine, or move devingress with
 ```sh
 go install github.com/WonderPanda/devingress/cmd/devingress@latest
 
-# Let it bind :80/:443 as your user (repeat after every reinstall)
-sudo setcap cap_net_bind_service=+ep "$(go env GOPATH)/bin/devingress"
+# Run serve at boot, as you, with the capability to bind :80/:443
+devingress service install
 ```
 
-Run it as a systemd user service:
+`service install` writes `/etc/systemd/system/devingress.service`, a system
+unit that runs `devingress serve` as your user after Docker, turns on lingering
+so `/run/user/<uid>` exists at boot, and starts it. It prints each `sudo`
+command before running it; `devingress service install --print` shows the unit
+and the commands without running anything. systemd grants the bind capability,
+so reinstalling the binary only needs `sudo systemctl restart devingress`.
+`devingress service uninstall` removes the unit.
 
-```ini
-# ~/.config/systemd/user/devingress.service
-[Unit]
-Description=devingress local HTTPS ingress
-
-[Service]
-ExecStart=%h/go/bin/devingress serve
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-```
-
-```sh
-systemctl --user enable --now devingress
-```
+If you set devingress up from an earlier version of this README, with a user
+unit in `~/.config/systemd/user/devingress.service` and `setcap`, stop the user
+unit first with `systemctl --user disable --now devingress`; `service install`
+reminds you when that file exists.
 
 **Certificates:** run `devingress trust` once. It installs devingress's own
 root CA into the system store, NSS (Chrome, Firefox) and Java, asking for
@@ -192,6 +186,4 @@ ca_root = "/path/to/ca"              # default: mkcert's CAROOT
 
 ## Status
 
-Early, and only run on Linux so far. There's no `devingress install` command
-yet, and `serve` can't bind the docker0 address until Docker is up (the unit's
-`Restart=on-failure` retries until it is).
+Early, and only run on Linux so far.
