@@ -18,11 +18,14 @@ the route file format.
 ```sh
 go build -o bin/devingress ./cmd/devingress
 go test ./...
+go test -tags e2e ./e2e/...   # builds the binary, runs an isolated serve on free ports, drives it over TLS
 go vet ./...
+go vet -tags e2e ./...
 gofmt -l .               # must print nothing; `gofmt -w .` fixes it
 ```
 
-Before opening a PR, `go build ./...`, `go test ./...`, `go vet ./...` and `gofmt -l .` all pass.
+Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e/...`, `go vet ./...`
+(also with `-tags e2e`) and `gofmt -l .` all pass.
 
 ## Hard rules
 
