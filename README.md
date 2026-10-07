@@ -101,9 +101,13 @@ WantedBy=default.target
 systemctl --user enable --now devingress
 ```
 
-**Certificates:** if you use [mkcert](https://github.com/FiloSottile/mkcert)
-(`mkcert -install`), devingress signs with its root, so your browser and
-anything else that already trusts mkcert trusts devingress.
+**Certificates:** run `devingress trust` once. It installs devingress's own
+root CA into the system store, NSS (Chrome, Firefox) and Java, asking for
+`sudo` for the system store. If you already use
+[mkcert](https://github.com/FiloSottile/mkcert) (`mkcert -install`), you can
+skip this: devingress signs with mkcert's root, so everything that already
+trusts mkcert trusts devingress. Node.js ignores the system store; point it at
+the root with `NODE_EXTRA_CA_CERTS=$(devingress trust --path)`.
 
 **DNS:** point your dev domain at `127.0.0.1`, e.g. with dnsmasq
 `address=/example.dev/127.0.0.1`. Or use `*.localhost`, which most browsers and

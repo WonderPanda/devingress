@@ -6,8 +6,8 @@ the route file format.
 
 ## Layout
 
-- `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `caddyfile`), each command's
-  help text next to it. `devingress help routefile` lives in `internal/routefile/help.go`.
+- `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `caddyfile`, `trust`), each
+  command's help text next to it. `devingress help routefile` lives in `internal/routefile/help.go`.
 - `internal/routefile/`: parses `devingress.toml` and expands `${VARS}`.
 - `internal/render/`: merges every owner's routes into one Caddy config.
 - `internal/state/`: one JSON file per registered checkout, under `$XDG_STATE_HOME/devingress`.
