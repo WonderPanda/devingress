@@ -84,6 +84,7 @@ Then, from the checkout or your worktree setup/teardown hooks:
 devingress up          # register this checkout's routes
 devingress down        # remove them
 devingress status      # every registered checkout and its URLs
+devingress routes      # every registered route; --dir . for this checkout's, --json for scripts
 ```
 
 Every `up`/`down` also removes the routes of checkouts that no longer exist, so
@@ -111,6 +112,9 @@ proxy = 'header_down Cache-Control "max-age=45"'   # raw, inside reverse_proxy
 
 devingress variables are `${NAME}`; Caddy's own `{placeholder}` syntax passes
 through untouched.
+
+`devingress help routefile` prints the full `devingress.toml` reference, and
+`devingress help <command>` each command's flags, files and exit codes.
 
 ## How it works
 
