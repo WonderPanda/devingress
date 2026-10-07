@@ -25,6 +25,7 @@ const usage = `devingress: local HTTPS routing for projects and worktrees
   devingress routes [--dir D] [--host H] [--json]  query registered routes
   devingress caddyfile                             print the rendered Caddyfile
   devingress trust [--uninstall] [--path]          trust devingress's root CA (mkcert optional)
+  devingress service install|uninstall [--print]   run serve at boot as a systemd system unit
   devingress help <command>                        full help for one command
   devingress help routefile                        the devingress.toml reference
 
@@ -56,6 +57,7 @@ var commands = map[string]command{
 	"routes":    {synopsis: "routes [--dir D] [--host H] [--json]", help: routesHelp, run: routes},
 	"caddyfile": {synopsis: "caddyfile", help: caddyfileHelp, run: caddyfile},
 	"trust":     {synopsis: "trust [--uninstall] [--path]", help: trustHelp, run: trust},
+	"service":   {synopsis: "service install|uninstall [--print]", help: serviceHelp, run: serviceCmd},
 }
 
 // usageError is a bad command line: exit 2 with the command's synopsis.
@@ -147,17 +149,27 @@ func noArgs(name string, args []string) error {
 	return nil
 }
 
-// dirArg parses flags that may come before or after the positional dir.
-func dirArg(fs *flag.FlagSet, args []string) (string, error) {
+// positional parses flags that may come before, between or after positional arguments, and
+// returns the positional ones.
+func positional(fs *flag.FlagSet, args []string) ([]string, error) {
 	var pos []string
 	for len(args) > 0 {
 		if err := parse(fs, args); err != nil {
-			return "", err
+			return nil, err
 		}
 		args = fs.Args()
 		if len(args) > 0 {
 			pos, args = append(pos, args[0]), args[1:]
 		}
+	}
+	return pos, nil
+}
+
+// dirArg parses flags that may come before or after the positional dir.
+func dirArg(fs *flag.FlagSet, args []string) (string, error) {
+	pos, err := positional(fs, args)
+	if err != nil {
+		return "", err
 	}
 	if len(pos) > 1 {
 		return "", usageError{fmt.Errorf("expected at most one directory, got %v", pos)}
@@ -184,8 +196,8 @@ func ownerDir(dir string) (string, error) {
 }
 
 const serveHelp = `Run the proxy in the foreground until SIGINT or SIGTERM: Caddy serving every registered route on
-http_port and https_port of each bind address. Normally run as a systemd user service. Only one
-serve runs per admin socket.
+http_port and https_port of each bind address. Normally run by the system unit that "devingress
+service install" sets up. Only one serve runs per admin socket.
 
 Reads the config file and the state dir, pruning owners whose directory is gone, then creates the
 admin socket and keeps certificates under $XDG_DATA_HOME/devingress/caddy. up and down load new
