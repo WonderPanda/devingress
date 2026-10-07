@@ -8,9 +8,8 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -360,9 +359,10 @@ func upstreamPort() string {
 	return port
 }
 
-// writeCA writes a throwaway root shaped like mkcert's (pathlen:0) to dir.
+// writeCA writes a throwaway root shaped like mkcert's (RSA-3072, PKCS#8 key,
+// pathlen:0) to dir.
 func writeCA(dir string) error {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
 		return err
 	}
