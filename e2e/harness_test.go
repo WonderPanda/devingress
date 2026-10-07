@@ -76,7 +76,7 @@ func setup(m *testing.M) (int, error) {
 	if err := writeCA(caDir); err != nil {
 		return 0, err
 	}
-	srv, err = startInstance(filepath.Join(root, "main"), caDir)
+	srv, err = startInstance(filepath.Join(root, "main"), caDir, "")
 	if err != nil {
 		return 0, err
 	}
@@ -114,14 +114,16 @@ type instance struct {
 	root      string
 	env       []string
 	httpsPort int
+	dnsAddr   string // dns_listen
 	cmd       *exec.Cmd
 	log       *syncBuffer
 	exited    chan struct{}
 }
 
 // startInstance runs `serve` with every XDG dir under root. caRoot == ""
-// leaves ca_root unset so Caddy mints its own root.
-func startInstance(root, caRoot string) (*instance, error) {
+// leaves ca_root unset so Caddy mints its own root; dnsAddr == "" picks a free
+// port for dns_listen.
+func startInstance(root, caRoot, dnsAddr string) (*instance, error) {
 	in := &instance{root: root, log: &syncBuffer{}, exited: make(chan struct{})}
 	httpPort, err := freePort()
 	if err != nil {
@@ -129,6 +131,13 @@ func startInstance(root, caRoot string) (*instance, error) {
 	}
 	if in.httpsPort, err = freePort(); err != nil {
 		return nil, err
+	}
+	if in.dnsAddr = dnsAddr; dnsAddr == "" {
+		dnsPort, err := freePort()
+		if err != nil {
+			return nil, err
+		}
+		in.dnsAddr = fmt.Sprintf("127.0.0.1:%d", dnsPort)
 	}
 
 	xdg := map[string]string{
@@ -152,7 +161,8 @@ func startInstance(root, caRoot string) (*instance, error) {
 		}
 	}
 
-	conf := fmt.Sprintf("bind = [\"127.0.0.1\"]\nhttp_port = %d\nhttps_port = %d\n", httpPort, in.httpsPort)
+	conf := fmt.Sprintf("bind = [\"127.0.0.1\"]\nhttp_port = %d\nhttps_port = %d\ndns_listen = %q\n",
+		httpPort, in.httpsPort, in.dnsAddr)
 	if caRoot != "" {
 		conf += fmt.Sprintf("ca_root = %q\n", caRoot)
 	}

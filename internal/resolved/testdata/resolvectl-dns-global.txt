@@ -1,0 +1,7 @@
+Global: 127.0.0.1:5354
+Link 3 (eno2): 192.168.1.254 2001:56a:f724:7800:dad8:e5ff:fe11:4066
+Link 71 (vethb09f3db):
+Link 2 (eno1):
+Link 5 (wlp8s0):
+Link 12 (docker0):
+Link 6 (tailscale0): 100.100.100.100 fd7a:115c:a1e0::53

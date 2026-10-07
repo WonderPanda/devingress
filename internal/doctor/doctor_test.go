@@ -18,6 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
+
+	"github.com/WonderPanda/devingress/internal/localdns"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/service"
 )
@@ -373,5 +376,82 @@ func TestRunBadConfigShortCircuits(t *testing.T) {
 	checks := Run(DefaultDeps())
 	if len(checks) != 1 || checks[0].Check != "config" || checks[0].Status != Fail {
 		t.Errorf("checks = %+v, want exactly one failing config check", checks)
+	}
+}
+
+func TestCheckDNSListen(t *testing.T) {
+	s, err := localdns.Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	deps := DefaultDeps()
+	if got := checkDNSListen(deps, s.Addr()); got.Status != OK || got.Subject != s.Addr()+" (dns_listen)" {
+		t.Errorf("pass: %+v", got)
+	}
+
+	closed := net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
+	if got := checkDNSListen(deps, closed); got.Status != Fail || !strings.Contains(got.Message, "does not answer") {
+		t.Errorf("nothing listening: %+v", got)
+	}
+
+	other := Deps{Exchange: func(q *dns.Msg, _ string) (*dns.Msg, error) {
+		r := new(dns.Msg).SetReply(q)
+		r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET},
+			A: net.ParseIP("93.184.216.34")}}
+		return r, nil
+	}}
+	if got := checkDNSListen(other, "127.0.0.1:15353"); got.Status != Fail || !strings.Contains(got.Message, "not 127.0.0.1") {
+		t.Errorf("another server: %+v", got)
+	}
+}
+
+func TestCheckDNSRoutes(t *testing.T) {
+	dir := t.TempDir()
+	owners := []routefile.Owner{{Dir: dir, Sites: []routefile.Site{
+		{Host: "web.example.dev"}, {Host: "api.example.dev"}, {Host: "web.app.localhost"}, {Host: "web.other.dev"},
+	}}}
+	dropIn := "/etc/systemd/resolved.conf.d/devingress-example.dev.conf"
+	deps := Deps{
+		Glob: func(pattern string) ([]string, error) {
+			if pattern != "/etc/systemd/resolved.conf.d/devingress-*.conf" {
+				t.Errorf("glob %q", pattern)
+			}
+			return []string{dropIn}, nil
+		},
+		ReadFile: func(name string) ([]byte, error) {
+			if name != dropIn {
+				return nil, os.ErrNotExist
+			}
+			return []byte("[Resolve]\nDNS=127.0.0.1:15353\nDomains=~example.dev\n"), nil
+		},
+		Lookup: func(host string) ([]net.IP, error) {
+			if strings.HasSuffix(host, ".localhost") {
+				return []net.IP{net.ParseIP("::1")}, nil
+			}
+			return nil, errors.New("no such host")
+		},
+	}
+	checks := checkDNSRoutes(deps, owners)
+	want := []Status{OK, OK, OK, Warn}
+	if len(checks) != len(want) {
+		t.Fatalf("got %d checks, want %d: %+v", len(checks), len(want), checks)
+	}
+	for i, c := range checks {
+		if c.Check != "dns" || c.Status != want[i] {
+			t.Errorf("%s: %+v, want %s", owners[0].Sites[i].Host, c, want[i])
+		}
+	}
+	if !strings.Contains(checks[0].Message, dropIn) || !strings.Contains(checks[2].Message, "resolves to loopback") {
+		t.Errorf("messages: %q, %q", checks[0].Message, checks[2].Message)
+	}
+	if !strings.HasPrefix(checks[3].Fix, "devingress dns setup other.dev") {
+		t.Errorf("fix: %q", checks[3].Fix)
+	}
+
+	none := deps
+	none.Glob = func(string) ([]string, error) { return nil, nil }
+	if got := checkDNSRoutes(none, owners); got[0].Status != Warn {
+		t.Errorf("no drop-ins: %+v", got[0])
 	}
 }

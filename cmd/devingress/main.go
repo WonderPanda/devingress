@@ -27,6 +27,7 @@ const usage = `devingress: local HTTPS routing for projects and worktrees
   devingress caddyfile                             print the rendered Caddyfile
   devingress trust [--uninstall] [--path]          trust devingress's root CA (mkcert optional)
   devingress service install|uninstall [--print]   run serve at boot as a systemd system unit
+  devingress dns setup|remove <domain> [--reset-global-dns] [--print]  route a domain to serve's DNS
   devingress help <command>                        full help for one command
   devingress help routefile                        the devingress.toml reference
 
@@ -37,7 +38,8 @@ its env files at that moment) and "devingress down" before the worktree is remov
 deleted without "down" is pruned by the next up or down.
 
 Files:
-  ~/.config/devingress/config.toml          host settings: bind, http_port, https_port, ca_root
+  ~/.config/devingress/config.toml          host settings: bind, http_port, https_port, ca_root,
+                                            dns_listen
   $XDG_STATE_HOME/devingress                registered routes (default ~/.local/state/devingress)
   $XDG_RUNTIME_DIR/devingress/admin.sock    admin socket of the running serve
 `
@@ -60,6 +62,7 @@ var commands = map[string]command{
 	"caddyfile": {synopsis: "caddyfile", help: caddyfileHelp, run: caddyfile},
 	"trust":     {synopsis: "trust [--uninstall] [--path]", help: trustHelp, run: trust},
 	"service":   {synopsis: "service install|uninstall [--print]", help: serviceHelp, run: serviceCmd},
+	"dns":       {synopsis: "dns setup|remove <domain> [--reset-global-dns] [--print]", help: dnsHelp, run: dnsCmd},
 }
 
 // usageError is a bad command line: exit 2 with the command's synopsis.

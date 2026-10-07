@@ -18,7 +18,11 @@ type Config struct {
 	HTTPPort  int      `toml:"http_port"`
 	HTTPSPort int      `toml:"https_port"`
 	CARoot    string   `toml:"ca_root"`
+	DNSListen string   `toml:"dns_listen"` // "" disables serve's DNS listener
 }
+
+// DefaultDNSListen is dns_listen when config.toml does not set it.
+const DefaultDNSListen = "127.0.0.1:15353"
 
 func xdg(env, fallback string) string {
 	if v := os.Getenv(env); v != "" {
@@ -50,8 +54,12 @@ func CaddyDir() string { return filepath.Join(DataDir(), "caddy") }
 // Load reads the optional config file and fills defaults.
 func Load() (Config, error) {
 	var c Config
-	if _, err := toml.DecodeFile(ConfigFile(), &c); err != nil && !os.IsNotExist(err) {
+	md, err := toml.DecodeFile(ConfigFile(), &c)
+	if err != nil && !os.IsNotExist(err) {
 		return c, err
+	}
+	if !md.IsDefined("dns_listen") {
+		c.DNSListen = DefaultDNSListen
 	}
 	if c.HTTPPort == 0 {
 		c.HTTPPort = 80

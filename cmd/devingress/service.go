@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/WonderPanda/devingress/internal/service"
 )
@@ -67,7 +68,7 @@ func serviceCmd(args []string, stdout io.Writer) error {
 		return err
 	}
 	if pos[0] == "uninstall" {
-		if err := runSteps(service.Uninstall(), *printOnly, stdout); err != nil {
+		if err := runSteps(service.Uninstall(), *printOnly, serviceRun, stdout); err != nil {
 			return err
 		}
 		note(stdout, *printOnly, `Lingering is left as it is; "sudo loginctl disable-linger <user>" turns it off.`)
@@ -96,12 +97,12 @@ func serviceCmd(args []string, stdout io.Writer) error {
 				service.UserUnit(acct), acct.Name, stop)
 		}
 	}
-	return runSteps(service.Install(acct, service.Unit(acct, exe, os.Getenv)), *printOnly, stdout)
+	return runSteps(service.Install(acct, service.Unit(acct, exe, os.Getenv)), *printOnly, serviceRun, stdout)
 }
 
-// runSteps prints each step and runs it or, with printOnly, prints the steps as a shell script
-// and runs nothing.
-func runSteps(steps []service.Step, printOnly bool, stdout io.Writer) error {
+// runSteps prints each step and runs it with run or, with printOnly, prints the steps as a shell
+// script and runs nothing.
+func runSteps(steps []service.Step, printOnly bool, run func(service.Step, io.Writer) error, stdout io.Writer) error {
 	for _, s := range steps {
 		switch {
 		case printOnly && s.Stdin != "":
@@ -110,7 +111,7 @@ func runSteps(steps []service.Step, printOnly bool, stdout io.Writer) error {
 			fmt.Fprintln(stdout, s)
 		default:
 			fmt.Fprintf(stdout, "+ %s\n", s)
-			if err := serviceRun(s, stdout); err != nil {
+			if err := run(s, stdout); err != nil {
 				return err
 			}
 		}
@@ -118,10 +119,10 @@ func runSteps(steps []service.Step, printOnly bool, stdout io.Writer) error {
 	return nil
 }
 
-// note prints a line of explanation, as a comment when the output is a script.
+// note prints lines of explanation, as comments when the output is a script.
 func note(stdout io.Writer, printOnly bool, text string) {
 	if printOnly {
-		text = "# " + text
+		text = "# " + strings.ReplaceAll(text, "\n", "\n# ")
 	}
 	fmt.Fprintln(stdout, text)
 }

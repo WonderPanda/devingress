@@ -17,6 +17,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/localdns"
 	"github.com/WonderPanda/devingress/internal/render"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
@@ -160,10 +161,15 @@ func load(cfgJSON []byte) error {
 	return nil
 }
 
-// Serve runs Caddy with every live owner's routes until SIGINT/SIGTERM.
+// Serve runs Caddy with every live owner's routes, and the DNS listener when dns_listen is set,
+// until SIGINT/SIGTERM.
 func Serve() error {
 	if Running() {
 		return fmt.Errorf("devingress is already serving on %s", config.AdminSocket())
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 	if sock := config.AdminSocket(); len(sock) > 107 {
 		return fmt.Errorf("admin socket path %s is %d bytes; Unix sockets allow 107 (set a shorter XDG_RUNTIME_DIR)", sock, len(sock))
@@ -173,6 +179,14 @@ func Serve() error {
 	}
 	// A socket file left by a crash makes the admin listener fail to bind.
 	_ = os.Remove(config.AdminSocket())
+
+	if cfg.DNSListen != "" {
+		dns, err := localdns.Listen(cfg.DNSListen)
+		if err != nil {
+			return err
+		}
+		defer dns.Close()
+	}
 
 	// Prune before the first load so a dead owner's hosts never come up.
 	res, err := Reconcile(func(o []routefile.Owner) []routefile.Owner { return o })
