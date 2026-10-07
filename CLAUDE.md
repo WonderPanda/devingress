@@ -6,8 +6,8 @@ the route file format.
 
 ## Layout
 
-- `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `caddyfile`, `trust`,
-  `service`), each command's help text next to it. `devingress help routefile` lives in
+- `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `doctor`, `caddyfile`,
+  `trust`, `service`), each command's help text next to it. `devingress help routefile` lives in
   `internal/routefile/help.go`.
 - `internal/routefile/`: parses `devingress.toml` and expands `${VARS}`.
 - `internal/render/`: merges every owner's routes into one Caddy config.
@@ -15,6 +15,8 @@ the route file format.
 - `internal/ingress/`: runs Caddy and reloads it through the admin socket.
 - `internal/service/`: the systemd system unit `devingress service install` writes, and its commands.
 - `internal/config/`: host settings (`~/.config/devingress/config.toml`) and the XDG paths.
+- `internal/doctor/`: the read-only checks behind `devingress doctor`, each one a function taking
+  its own injectable dependencies (resolver, dialer, cert pool, file reads).
 
 ## Commands
 
