@@ -67,6 +67,7 @@ routes = "devingress up"
 | Ports | Picked from 4000–4999 when the app launches. Fine for traffic through the proxy, but anything that bypasses it (containers calling `host.docker.internal:<port>`, plain-HTTP server-to-server calls) needs the port at setup time, which means pinning `--app-port` per worktree and allocating ports yourself | Allocated once by your setup; env files, Docker Compose and `devingress.toml` all read the same values |
 | Hostnames | `<branch>.<app>.localhost`, so existing names in env files, CORS allowlists, cookie domains and OAuth redirect URIs have to be renamed. `portless get` prints the URL ahead of time for wiring | Any template, e.g. `web-${slug}.example.dev`, so existing names stay as they are. `devingress routes --json` lists the registered URLs |
 | Per-route settings | App name, script and port | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
+| DNS | `*.localhost`, or `/etc/hosts` entries it keeps in sync, which needs root on every route change | A built-in wildcard DNS listener for any domain; `devingress dns setup` needs root once |
 | Runtime | Node.js 24+, installed with npm | One Go binary |
 | Running at boot | `portless service install` | `devingress service install` |
 
@@ -103,9 +104,20 @@ skip this: devingress signs with mkcert's root, so everything that already
 trusts mkcert trusts devingress. Node.js ignores the system store; point it at
 the root with `NODE_EXTRA_CA_CERTS=$(devingress trust --path)`.
 
-**DNS:** point your dev domain at `127.0.0.1`, e.g. with dnsmasq
-`address=/example.dev/127.0.0.1`. Or use `*.localhost`, which most browsers and
-curl already resolve to loopback.
+**DNS:** run `devingress dns setup example.dev` once. `serve` runs a wildcard
+DNS listener (`dns_listen`, default `127.0.0.1:15353`) that answers loopback
+for every name, and `dns setup` routes your dev domain to it through a
+systemd-resolved drop-in, asking for `sudo`; `--print` shows the drop-in and the
+commands without running anything. If resolved has global DNS servers (e.g.
+from `omarchy dns`), they are asked first and answer NXDOMAIN, so `setup`
+refuses; `--reset-global-dns` clears them, which affects every lookup on the
+machine. dnsmasq (`address=/example.dev/127.0.0.1`) and `*.localhost`, which
+resolved, browsers and curl already resolve to loopback, still work instead.
+
+Containers don't use the host's resolved; give them `extra_hosts`. To share
+the routing with them, a resolved drop-in with `DNSStubListenerExtra=172.17.0.1`
+makes resolved's stub listen on docker0, and containers given
+`dns: 172.17.0.1` get the same per-domain routing.
 
 ## Usage
 
@@ -133,6 +145,7 @@ devingress down        # remove them
 devingress status      # every registered checkout and its URLs
 devingress routes      # every registered route; --dir . for this checkout's, --json for scripts
 devingress doctor      # a URL doesn't load? diagnose serve, ports, DNS, certificates and more
+devingress dns setup example.dev   # once: resolve *.example.dev to loopback
 ```
 
 Every `up`/`down` also removes the routes of checkouts that no longer exist, so
@@ -181,6 +194,7 @@ bind = ["127.0.0.1", "172.17.0.1"]   # default: loopback + docker0 if present
 http_port = 80
 https_port = 443
 ca_root = "/path/to/ca"              # default: mkcert's CAROOT
+dns_listen = "127.0.0.1:15353"       # serve's DNS listener; "" turns it off
 ```
 
 `devingress caddyfile` prints the generated Caddy config.
