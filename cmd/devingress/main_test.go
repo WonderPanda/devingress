@@ -33,7 +33,7 @@ func runCLI(t *testing.T, args ...string) (code int, stdout, stderr string) {
 
 func TestHelpIsTheSameEveryWay(t *testing.T) {
 	isolate(t)
-	want := []string{"caddyfile", "dns", "doctor", "down", "routes", "serve", "service", "status", "trust", "up"}
+	want := []string{"caddyfile", "dns", "doctor", "down", "routes", "serve", "service", "status", "trust", "up", "version"}
 	if got := slices.Sorted(func(yield func(string) bool) {
 		for name := range commands {
 			if !yield(name) {

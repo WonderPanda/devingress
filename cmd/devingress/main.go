@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 
 	"github.com/WonderPanda/devingress/internal/config"
@@ -15,6 +16,9 @@ import (
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
 )
+
+// version is set by release builds via -ldflags "-X main.version=...".
+var version string
 
 const usage = `devingress: local HTTPS routing for projects and worktrees
 
@@ -28,6 +32,7 @@ const usage = `devingress: local HTTPS routing for projects and worktrees
   devingress trust [--uninstall] [--path]          trust devingress's root CA (mkcert optional)
   devingress service install|uninstall [--print]   run serve at boot as a systemd system unit
   devingress dns setup|remove <domain> [--reset-global-dns] [--print]  route a domain to serve's DNS
+  devingress version                               print the version and exit
   devingress help <command>                        full help for one command
   devingress help routefile                        the devingress.toml reference
 
@@ -63,6 +68,7 @@ var commands = map[string]command{
 	"trust":     {synopsis: "trust [--uninstall] [--path]", help: trustHelp, run: trust},
 	"service":   {synopsis: "service install|uninstall [--print]", help: serviceHelp, run: serviceCmd},
 	"dns":       {synopsis: "dns setup|remove <domain> [--reset-global-dns] [--print]", help: dnsHelp, run: dnsCmd},
+	"version":   {synopsis: "version", help: versionHelp, run: versionCmd},
 }
 
 // usageError is a bad command line: exit 2 with the command's synopsis.
@@ -81,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch name {
 	case "-h", "--help", "help":
 		return help(args, stdout, stderr)
+	case "--version":
+		name = "version"
 	}
 	cmd, ok := commands[name]
 	if !ok {
@@ -398,4 +406,40 @@ func caddyfile(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprint(stdout, text)
 	return nil
+}
+
+const versionHelp = `Print devingress's version and exit. Same as "devingress --version".
+
+The version is whatever a release build's "-ldflags -X main.version=..." stamped in. A binary
+built with "go install .../devingress@vX.Y.Z" has no such stamp, so this falls back to that
+module version from the build info; a plain "go build" has neither and prints "dev".
+
+Exit codes:
+  0  printed
+  2  bad flag or argument
+
+Example:
+  devingress version
+`
+
+func versionCmd(args []string, stdout io.Writer) error {
+	if err := noArgs("version", args); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, appVersion())
+	return nil
+}
+
+// readBuildInfo is debug.ReadBuildInfo; tests replace it.
+var readBuildInfo = debug.ReadBuildInfo
+
+// appVersion is the ldflags-stamped version, the module version from build info, or "dev".
+func appVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := readBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
