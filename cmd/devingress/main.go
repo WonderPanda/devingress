@@ -24,6 +24,7 @@ const usage = `devingress: local HTTPS routing for projects and worktrees
   devingress status                                list owners and their hosts
   devingress routes [--dir D] [--host H] [--json]  query registered routes
   devingress caddyfile                             print the rendered Caddyfile
+  devingress trust [--uninstall] [--path]          trust devingress's root CA (mkcert optional)
   devingress help <command>                        full help for one command
   devingress help routefile                        the devingress.toml reference
 
@@ -54,6 +55,7 @@ var commands = map[string]command{
 	"status":    {synopsis: "status", help: statusHelp, run: status},
 	"routes":    {synopsis: "routes [--dir D] [--host H] [--json]", help: routesHelp, run: routes},
 	"caddyfile": {synopsis: "caddyfile", help: caddyfileHelp, run: caddyfile},
+	"trust":     {synopsis: "trust [--uninstall] [--path]", help: trustHelp, run: trust},
 }
 
 // usageError is a bad command line: exit 2 with the command's synopsis.

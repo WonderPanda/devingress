@@ -5,6 +5,7 @@ go 1.27.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/caddyserver/caddy/v2 v2.11.7
+	github.com/smallstep/truststore v0.13.0
 )
 
 require (
@@ -106,7 +107,6 @@ require (
 	github.com/smallstep/nosql v0.8.0 // indirect
 	github.com/smallstep/pkcs7 v0.2.3 // indirect
 	github.com/smallstep/scep v0.0.0-20260331191114-261f960a40d1 // indirect
-	github.com/smallstep/truststore v0.13.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
