@@ -44,4 +44,5 @@ Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e
 ## Pull requests
 
 Commits and PR titles use conventional prefixes (`feat:`, `fix:`, `docs:`, `chore:`). Open the PR
-with `gh pr create`; its body says what changed and why.
+with `gh pr create`; its body says what changed and why. CI (`.github/workflows/ci.yml`) runs
+`go build`, `go vet`, `gofmt -l` and `go test` on every PR and on pushes to `main`.
