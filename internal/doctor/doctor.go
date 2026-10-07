@@ -16,7 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/miekg/dns"
+
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/resolved"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/service"
 	"github.com/WonderPanda/devingress/internal/state"
@@ -57,6 +60,8 @@ type Deps struct {
 	Interfaces func() ([]Iface, error)
 	ReadFile   func(name string) ([]byte, error)
 	Executable func() (string, error)
+	Exchange   func(m *dns.Msg, addr string) (*dns.Msg, error)
+	Glob       func(pattern string) ([]string, error)
 }
 
 // DefaultDeps reach the real network, filesystem and this machine's
@@ -82,6 +87,11 @@ func DefaultDeps() Deps {
 			}
 			return filepath.EvalSymlinks(exe)
 		},
+		Exchange: func(m *dns.Msg, addr string) (*dns.Msg, error) {
+			r, _, err := (&dns.Client{Timeout: 2 * time.Second}).Exchange(m, addr)
+			return r, err
+		},
+		Glob: filepath.Glob,
 	}
 }
 
@@ -122,6 +132,9 @@ func Run(deps Deps) []Check {
 	checks = append(checks, checkServe(deps, config.AdminSocket()))
 	checks = append(checks, checkPorts(deps, cfg.Bind, cfg.HTTPPort, cfg.HTTPSPort)...)
 	checks = append(checks, checkBind(deps, cfg.Bind)...)
+	if cfg.DNSListen != "" {
+		checks = append(checks, checkDNSListen(deps, cfg.DNSListen))
+	}
 
 	rootPath, mkcert, err := cfg.RootCert()
 	if err != nil {
@@ -136,6 +149,7 @@ func Run(deps Deps) []Check {
 	} else {
 		checks = append(checks, checkOwners(owners)...)
 		checks = append(checks, checkHosts(deps, owners, cfg.HTTPSPort, rootPath)...)
+		checks = append(checks, checkDNSRoutes(deps, owners)...)
 	}
 
 	checks = append(checks, checkService(deps)...)
@@ -215,6 +229,22 @@ func checkBind(deps Deps, bind []string) []Check {
 	return out
 }
 
+func checkDNSListen(deps Deps, addr string) Check {
+	q := new(dns.Msg).SetQuestion("doctor.devingress.", dns.TypeA)
+	r, err := deps.Exchange(q, addr)
+	if err != nil {
+		return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: Fail,
+			Message: "DNS listener does not answer: " + err.Error(),
+			Fix:     "start serve, or free " + addr + " if something else is using it"}
+	}
+	if len(r.Answer) != 1 || r.Answer[0].Header().Rrtype != dns.TypeA || !r.Answer[0].(*dns.A).A.IsLoopback() {
+		return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: Fail,
+			Message: fmt.Sprintf("answers %v, not 127.0.0.1: something other than devingress listens here", r.Answer),
+			Fix:     "free " + addr + ", or set dns_listen in config.toml to a free address"}
+	}
+	return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: OK, Message: "DNS listener answers 127.0.0.1"}
+}
+
 func checkCA(deps Deps, rootPath string, mkcert bool) Check {
 	fix := "devingress trust"
 	if mkcert {
@@ -284,7 +314,7 @@ func checkHosts(deps Deps, owners []routefile.Owner, httpsPort int, rootPath str
 }
 
 func checkHostDNS(deps Deps, host string) Check {
-	const fix = "point DNS at 127.0.0.1 (dnsmasq, /etc/hosts, or *.localhost)"
+	fix := dnsFix(host)
 	ips, err := deps.Lookup(host)
 	if err != nil {
 		return Check{Check: "host", Subject: host, Status: Fail, Message: "does not resolve: " + err.Error(), Fix: fix}
@@ -294,6 +324,64 @@ func checkHostDNS(deps Deps, host string) Check {
 			Message: fmt.Sprintf("resolves to %v, not loopback", ips), Fix: fix}
 	}
 	return Check{Check: "host", Subject: host, Status: OK, Message: "resolves to loopback"}
+}
+
+// dnsFix suggests routing host's parent domain to devingress, the likeliest domain it was
+// registered under.
+func dnsFix(host string) string {
+	domain := host
+	if _, parent, ok := strings.Cut(host, "."); ok {
+		domain = parent
+	}
+	return fmt.Sprintf("devingress dns setup %s, or point DNS at 127.0.0.1 (dnsmasq, /etc/hosts, *.localhost)", domain)
+}
+
+// checkDNSRoutes warns about each live host that neither a devingress drop-in routes to the DNS
+// listener nor resolves to loopback some other way.
+func checkDNSRoutes(deps Deps, owners []routefile.Owner) []Check {
+	routed := map[string]string{} // domain -> the devingress drop-in routing it
+	paths, _ := deps.Glob(filepath.Join(resolved.Dir, resolved.DropInName("*")))
+	for _, p := range paths {
+		data, err := deps.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		domain := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "devingress-"), ".conf")
+		if resolved.RoutesDomain(string(data), domain) {
+			routed[domain] = p
+		}
+	}
+
+	seen := map[string]bool{}
+	var out []Check
+	for _, o := range owners {
+		if _, err := os.Stat(o.Dir); err != nil {
+			continue // covered by the owners check
+		}
+		for _, s := range o.Sites {
+			if seen[s.Host] {
+				continue
+			}
+			seen[s.Host] = true
+			out = append(out, checkDNSRoute(deps, s.Host, routed))
+		}
+	}
+	return out
+}
+
+func checkDNSRoute(deps Deps, host string, routed map[string]string) Check {
+	for d := host; d != ""; {
+		if p, ok := routed[d]; ok {
+			return Check{Check: "dns", Subject: host, Status: OK, Message: "routed to the DNS listener by " + p}
+		}
+		_, d, _ = strings.Cut(d, ".")
+	}
+	if ips, err := deps.Lookup(host); err == nil && slices.ContainsFunc(ips, net.IP.IsLoopback) {
+		return Check{Check: "dns", Subject: host, Status: OK, Message: "no devingress drop-in, but resolves to loopback"}
+	}
+	return Check{Check: "dns", Subject: host, Status: Warn,
+		Message: "no devingress drop-in in " + resolved.Dir + " routes it, and it does not resolve to loopback",
+		Fix:     dnsFix(host)}
 }
 
 func checkHostTLS(deps Deps, host string, httpsPort int, rootPool *x509.CertPool, rootErr error) Check {

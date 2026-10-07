@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 var (
@@ -89,11 +91,12 @@ func TestDoctor(t *testing.T) {
 	if err == nil {
 		t.Fatalf("doctor --json: exit 0, want 1 (the harness's domain never resolves)\n%s", out)
 	}
-	var checks []struct {
+	type check struct {
 		Check   string `json:"check"`
 		Subject string `json:"subject"`
 		Status  string `json:"status"`
 	}
+	var checks []check
 	if err := json.Unmarshal([]byte(out), &checks); err != nil {
 		t.Fatalf("doctor --json: %v\n%s", err, out)
 	}
@@ -101,6 +104,11 @@ func TestDoctor(t *testing.T) {
 	byCheck := map[string][]string{}
 	for _, c := range checks {
 		byCheck[c.Check] = append(byCheck[c.Check], c.Status)
+	}
+	if !slices.ContainsFunc(checks, func(c check) bool {
+		return c.Check == "dns" && c.Subject == srv.dnsAddr+" (dns_listen)" && c.Status == "ok"
+	}) {
+		t.Errorf("no passing DNS listener check for %s in:\n%s", srv.dnsAddr, out)
 	}
 	for _, name := range []string{"serve", "ports"} {
 		if len(byCheck[name]) == 0 {
@@ -254,7 +262,7 @@ func TestCaddyOwnRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
-	in, err := startInstance(root, "")
+	in, err := startInstance(root, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,4 +286,50 @@ func TestCaddyOwnRoot(t *testing.T) {
 	if err := in.serves(pool(t, filepath.Join(caDir, "rootCA.pem")), host); err == nil {
 		t.Fatal("served a leaf the other instance's test CA verifies")
 	}
+}
+
+// TestDNS queries the instance's DNS listener the way systemd-resolved would, for a registered
+// host: A is 127.0.0.1 and AAAA ::1, over UDP and TCP.
+func TestDNS(t *testing.T) {
+	for _, network := range []string{"udp", "tcp"} {
+		for qtype, want := range map[uint16]string{dns.TypeA: "127.0.0.1", dns.TypeAAAA: "::1"} {
+			q := new(dns.Msg).SetQuestion(dns.Fqdn(webHost), qtype)
+			r, _, err := (&dns.Client{Net: network}).Exchange(q, srv.dnsAddr)
+			if err != nil {
+				t.Fatalf("%s %s: %v", network, dns.TypeToString[qtype], err)
+			}
+			var got []string
+			for _, rr := range r.Answer {
+				switch rr := rr.(type) {
+				case *dns.A:
+					got = append(got, rr.A.String())
+				case *dns.AAAA:
+					got = append(got, rr.AAAA.String())
+				}
+			}
+			if r.Rcode != dns.RcodeSuccess || !slices.Equal(got, []string{want}) {
+				t.Errorf("%s %s %s: %s %v, want %s", network, webHost, dns.TypeToString[qtype],
+					dns.RcodeToString[r.Rcode], got, want)
+			}
+		}
+	}
+}
+
+// TestDNSListenInUse starts a second serve whose dns_listen is the harness instance's: it must
+// exit instead of serving, naming the address.
+func TestDNSListenInUse(t *testing.T) {
+	root, err := os.MkdirTemp("", "di")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	in, err := startInstance(root, caDir, srv.dnsAddr)
+	if err == nil {
+		in.stop()
+		t.Fatalf("serve started with dns_listen %s already in use", srv.dnsAddr)
+	}
+	if !strings.Contains(err.Error(), "serve exited") || !strings.Contains(err.Error(), srv.dnsAddr) {
+		t.Errorf("error does not name %s:\n%v", srv.dnsAddr, err)
+	}
+	t.Log(err)
 }
