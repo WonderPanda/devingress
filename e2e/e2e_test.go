@@ -4,7 +4,10 @@ package e2e
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,6 +74,53 @@ func TestALPN(t *testing.T) {
 		if cs.NegotiatedProtocol != want {
 			t.Errorf("%s: negotiated %q, want %q", host, cs.NegotiatedProtocol, want)
 		}
+	}
+}
+
+// TestRoutesURLsConnect checks that `routes --json` prints URLs that are
+// ready to use as-is, on an instance whose https_port is not 443 (the
+// harness always picks a free port, so this covers that bug by construction).
+func TestRoutesURLsConnect(t *testing.T) {
+	roots := pool(t, filepath.Join(caDir, "rootCA.pem"))
+	srv.waitServes(t, roots, webHost)
+
+	out, err := srv.run(mainDir, "routes", "--json")
+	if err != nil {
+		t.Fatalf("routes --json: %v\n%s", err, out)
+	}
+	var routes []struct {
+		Kind string `json:"kind"`
+		URL  string `json:"url"`
+		Host string `json:"host"`
+	}
+	if err := json.Unmarshal([]byte(out), &routes); err != nil {
+		t.Fatalf("routes --json: %v\n%s", err, out)
+	}
+	port := fmt.Sprintf(":%d", srv.httpsPort)
+	found := false
+	for _, r := range routes {
+		if r.Kind != "site" || r.Host != webHost {
+			continue
+		}
+		found = true
+		if !strings.HasSuffix(r.URL, port) {
+			t.Fatalf("url %q does not carry the instance's non-default https_port %s", r.URL, port)
+		}
+		resp, err := srv.client(roots).Get(r.URL)
+		if err != nil {
+			t.Fatalf("GET %s: %v", r.URL, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("GET %s: %v", r.URL, err)
+		}
+		if resp.StatusCode != http.StatusOK || string(body) != hello {
+			t.Fatalf("GET %s: got %s %q", r.URL, resp.Status, body)
+		}
+	}
+	if !found {
+		t.Fatalf("no site route for %s in:\n%s", webHost, out)
 	}
 }
 

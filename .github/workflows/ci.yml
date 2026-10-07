@@ -38,3 +38,18 @@ jobs:
 
       - name: go test
         run: go test ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        run: go vet -tags e2e ./...
+
+      - name: go test
+        run: go test -tags e2e -v ./e2e/...
