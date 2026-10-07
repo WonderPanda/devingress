@@ -43,6 +43,10 @@ func RuntimeDir() string {
 
 func AdminSocket() string { return filepath.Join(RuntimeDir(), "admin.sock") }
 
+// CaddyDir is Caddy's storage: certificates, and the root Caddy mints when
+// there is no ca_root.
+func CaddyDir() string { return filepath.Join(DataDir(), "caddy") }
+
 // Load reads the optional config file and fills defaults.
 func Load() (Config, error) {
 	var c Config
@@ -67,12 +71,25 @@ func Load() (Config, error) {
 func (c Config) Render() render.Options {
 	return render.Options{
 		AdminSocket: AdminSocket(),
-		StorageDir:  filepath.Join(DataDir(), "caddy"),
+		StorageDir:  CaddyDir(),
 		CARoot:      c.CARoot,
 		Bind:        c.Bind,
 		HTTPPort:    c.HTTPPort,
 		HTTPSPort:   c.HTTPSPort,
 	}
+}
+
+// RootCert is the absolute path of the root certificate serve signs with:
+// rootCA.pem in ca_root (mkcert's CAROOT unless config.toml sets one), or else
+// the root Caddy mints in CaddyDir, which may not exist yet. mkcert reports
+// the former.
+func (c Config) RootCert() (path string, mkcert bool, err error) {
+	path, mkcert = filepath.Join(CaddyDir(), "pki", "authorities", "local", "root.crt"), false
+	if c.CARoot != "" {
+		path, mkcert = filepath.Join(c.CARoot, "rootCA.pem"), true
+	}
+	path, err = filepath.Abs(path)
+	return path, mkcert, err
 }
 
 // defaultBind: loopback, plus the docker0 address when Docker is installed, so

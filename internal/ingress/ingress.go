@@ -110,6 +110,18 @@ func Caddyfile() (string, error) {
 	return render.Caddyfile(cfg.Render(), owners)
 }
 
+// Provision validates the registered routes the way up does, without loading
+// them into a running server. With no ca_root, provisioning creates Caddy's
+// root in config.CaddyDir if it is not there yet.
+func Provision() error {
+	text, err := Caddyfile()
+	if err != nil {
+		return err
+	}
+	_, err = render.Adapt(text)
+	return err
+}
+
 func adminClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
