@@ -23,6 +23,7 @@ const usage = `devingress: local HTTPS routing for projects and worktrees
   devingress down [dir]                            remove dir's routes
   devingress status                                list owners and their hosts
   devingress routes [--dir D] [--host H] [--json]  query registered routes
+  devingress doctor [--json]                       diagnose why a URL does not load
   devingress caddyfile                             print the rendered Caddyfile
   devingress trust [--uninstall] [--path]          trust devingress's root CA (mkcert optional)
   devingress service install|uninstall [--print]   run serve at boot as a systemd system unit
@@ -55,6 +56,7 @@ var commands = map[string]command{
 	"down":      {synopsis: "down [dir]", help: downHelp, run: down},
 	"status":    {synopsis: "status", help: statusHelp, run: status},
 	"routes":    {synopsis: "routes [--dir D] [--host H] [--json]", help: routesHelp, run: routes},
+	"doctor":    {synopsis: "doctor [--json]", help: doctorHelp, run: doctorCmd},
 	"caddyfile": {synopsis: "caddyfile", help: caddyfileHelp, run: caddyfile},
 	"trust":     {synopsis: "trust [--uninstall] [--path]", help: trustHelp, run: trust},
 	"service":   {synopsis: "service install|uninstall [--print]", help: serviceHelp, run: serviceCmd},
@@ -90,6 +92,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case errors.Is(err, flag.ErrHelp):
 		fmt.Fprint(stdout, cmd.text())
 		return 0
+	case errors.Is(err, errDoctorFailed):
+		return 1 // doctor already printed every failing check
 	case errors.As(err, &ue):
 		fmt.Fprintf(stderr, "devingress %s: %v\nusage: devingress %s\nRun \"devingress help %s\" for details.\n",
 			name, ue.error, cmd.synopsis, name)
