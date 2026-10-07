@@ -23,6 +23,30 @@ workers and `wss://` all behave differently over plain HTTP). Hand-maintained
 proxy configs drift, and a deleted worktree leaves routes pointing at nothing.
 devingress makes the routes part of the checkout.
 
+## Compared to portless
+
+[portless](https://github.com/vercel-labs/portless) solves the same problem with
+less setup, and if it fits your stack, use it: `portless run next dev` starts
+your dev server on a free port and serves it at `https://myapp.localhost`, with
+the branch added as a subdomain in linked worktrees.
+
+devingress exists for stacks that don't fit that model:
+
+| | portless | devingress |
+|---|---|---|
+| What creates a route | Starting your dev server through `portless`, which picks a port and passes it as `PORT`; `portless alias` for anything else | A `devingress.toml` in the checkout. Processes start however they already do (scripts, Docker Compose, a process manager) on ports you choose |
+| Hostnames | `<branch>.<app>.localhost` (configurable TLD) | Any template, e.g. `web-${slug}.example.dev`, so they match the names your env files, CORS allowlists and cookie domains already use |
+| Per-route settings | App name, script and port (`portless.json`) | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
+| Runtime | Node.js 24+, installed with npm | One Go binary |
+
+It was built for a stack that already had a hostname scheme wired into its env
+files and auth config, an API whose CORS preflights have to be answered at the
+proxy, and containers that fetch auth keys through a path route on port 80.
+None of those can be expressed as an app name and a port.
+
+Both bind ports 80 and 443, so run one per machine, or move one with
+`https_port`/`http_port` in devingress's host config.
+
 ## Install
 
 ```sh
