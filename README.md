@@ -64,8 +64,8 @@ routes = "devingress up"
 |---|---|---|
 | Services it doesn't launch | One `alias` per service in setup, one `--remove` per service in teardown | Listed once in `devingress.toml`; `devingress up` in setup |
 | Cleanup | Launched apps: when the process exits. Aliases: only when removed | When the checkout's directory is gone, on the next `up`/`down` |
-| Ports | Picked at launch unless pinned with `appPort` (`portless get` prints the URL ahead of time) | Yours, read from your env files |
-| Hostnames | `<branch>.<app>.localhost`; an alias is exactly the name given | Any template, e.g. `web-${slug}.example.dev`, to match names your config already uses |
+| Ports | Picked from 4000–4999 when the app launches. Fine for traffic through the proxy, but anything that bypasses it (containers calling `host.docker.internal:<port>`, plain-HTTP server-to-server calls) needs the port at setup time, which means pinning `--app-port` per worktree and allocating ports yourself | Allocated once by your setup; env files, Docker Compose and `devingress.toml` all read the same values |
+| Hostnames | `<branch>.<app>.localhost`, so existing names in env files, CORS allowlists, cookie domains and OAuth redirect URIs have to be renamed. `portless get` prints the URL ahead of time for wiring | Any template, e.g. `web-${slug}.example.dev`, so existing names stay as they are. `devingress routes --json` lists the registered URLs |
 | Per-route settings | App name, script and port | Retry while a dev server restarts, per-host HTTP/1.1 pin, raw Caddy for CORS, header and rewrite rules, plain-HTTP path routes for containers |
 | Runtime | Node.js 24+, installed with npm | One Go binary |
 
