@@ -1,0 +1,4 @@
+# Fill the module cache before the agent's first build, so a missing or unreachable module fails
+# here rather than in the middle of its checks. The cache is shared, so this is fast after the first.
+[[pre-start]]
+deps = "go mod download"
