@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/WonderPanda/devingress/internal/config"
 	"github.com/WonderPanda/devingress/internal/ingress"
+	"github.com/WonderPanda/devingress/internal/probe"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
 )
@@ -342,11 +344,17 @@ const statusHelp = `Print whether serve is running, then each registered owner: 
 and URLs. An owner whose directory no longer exists is marked "[gone; pruned on next up/down]".
 For output a program can parse, use "devingress routes --json".
 
-Reads the state dir and checks whether the admin socket accepts connections. Changes nothing, and
-works whether or not serve is running.
+Each URL line starts with a marker from a TCP dial to its upstream, made now, in parallel, with a
+300ms timeout: up (something accepts connections), down (nothing listens; the URL 502s) or unknown
+(an upstream it cannot dial, such as a {placeholder}, a port range or a list). On a terminal the
+marker is a dot, green for up, red for down and grey for unknown; when stdout is not a terminal,
+or NO_COLOR is set, it is the word up, down or ?.
+
+Reads the state dir, checks whether the admin socket accepts connections and dials every
+upstream. Changes nothing, and works whether or not serve is running.
 
 Exit codes:
-  0  printed
+  0  printed, whatever the upstreams' state
   1  the state dir could not be read
   2  bad flag or argument
 
@@ -367,6 +375,20 @@ func status(args []string, stdout io.Writer) error {
 	} else {
 		fmt.Fprintln(stdout, "not serving")
 	}
+	var upstreams []string
+	for _, o := range owners {
+		for _, s := range o.Sites {
+			upstreams = append(upstreams, s.Upstream)
+		}
+		for _, p := range o.Paths {
+			upstreams = append(upstreams, p.Upstream)
+		}
+	}
+	results := probe.All(net.DialTimeout, upstreams)
+	mark := plainMarker
+	if isTerminal(stdout) && os.Getenv("NO_COLOR") == "" {
+		mark = colorMarker
+	}
 	for _, o := range owners {
 		gone := ""
 		if _, err := os.Stat(o.Dir); err != nil {
@@ -374,13 +396,43 @@ func status(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "\n%s  (%s, slug %s)%s\n", o.Dir, o.File, o.Slug, gone)
 		for _, s := range o.Sites {
-			fmt.Fprintf(stdout, "  https://%s -> %s\n", s.Host, s.Upstream)
+			fmt.Fprintf(stdout, "  %s  https://%s -> %s\n", mark(results[s.Upstream]), s.Host, s.Upstream)
 		}
 		for _, p := range o.Paths {
-			fmt.Fprintf(stdout, "  http://<host>%s/* -> %s\n", p.Prefix, p.Upstream)
+			fmt.Fprintf(stdout, "  %s  http://<host>%s/* -> %s\n", mark(results[p.Upstream]), p.Prefix, p.Upstream)
 		}
 	}
 	return nil
+}
+
+func plainMarker(r probe.Result) string {
+	switch r {
+	case probe.Up:
+		return "up  "
+	case probe.Down:
+		return "down"
+	}
+	return "?   "
+}
+
+func colorMarker(r probe.Result) string {
+	switch r {
+	case probe.Up:
+		return "\x1b[32m●\x1b[0m" // green
+	case probe.Down:
+		return "\x1b[31m●\x1b[0m" // red
+	}
+	return "\x1b[90m●\x1b[0m" // grey
+}
+
+// isTerminal reports whether w is a character device, such as a terminal.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 const caddyfileHelp = `Print the Caddyfile that config.toml and the registered routes render to: what serve loads,

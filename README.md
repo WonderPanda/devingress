@@ -151,9 +151,9 @@ Then, from the checkout or your worktree setup/teardown hooks:
 ```sh
 devingress up          # register this checkout's routes
 devingress down        # remove them
-devingress status      # every registered checkout and its URLs
+devingress status      # every registered checkout and its URLs, each marked up or down
 devingress routes      # every registered route, grouped by checkout; --dir . for this checkout's, --json for scripts
-devingress doctor      # a URL doesn't load? diagnose serve, ports, DNS, certificates and more
+devingress doctor      # a URL doesn't load? diagnose serve, ports, DNS, certificates, upstreams
 devingress dns setup example.dev   # once: resolve *.example.dev to loopback
 ```
 
