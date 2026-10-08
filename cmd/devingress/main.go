@@ -241,10 +241,10 @@ directory; it is made absolute and symlinks are resolved, so one checkout is one
 is reached. Flags may come before or after dir.
 
 Flags:
-  --file F    route file, relative to dir (default devingress.toml)
+  --file F    route file: absolute, or relative to dir (default devingress.toml)
   --slug S    value of ${slug} (default: dir's git branch, slugified)
 
-Reads <dir>/<F>, the env files it names and, without --slug, dir's git branch. Takes the state
+Reads F, the env files it names and, without --slug, dir's git branch. Takes the state
 lock, prunes owners whose directory is gone, and validates every owner's routes together with
 Caddy before writing the state dir. If serve is running, the new config is loaded through the
 admin socket; if not, the routes are saved and apply when serve starts. A rejected change leaves
@@ -259,11 +259,12 @@ Exit codes:
 Examples:
   devingress up
   devingress up ../my-worktree --slug pr-123
+  devingress up ../my-worktree --file /path/to/shared/devingress.toml
 `
 
 func up(args []string, stdout io.Writer) error {
 	fs := flags("up")
-	file := fs.String("file", routefile.DefaultName, "route file, relative to dir")
+	file := fs.String("file", routefile.DefaultName, "route file: absolute, or relative to dir")
 	slug := fs.String("slug", "", "value of ${slug} (default: the git branch, slugified)")
 	dir, err := dirArg(fs, args)
 	if err != nil {
