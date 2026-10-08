@@ -256,6 +256,7 @@ type jsonRoute struct {
 	Protocols *[]string `json:"protocols"`
 	Strip     *bool     `json:"strip"`
 	Dir       string    `json:"dir"`
+	Name      *string   `json:"name"`
 	File      string    `json:"file"`
 	Slug      string    `json:"slug"`
 	Gone      *bool     `json:"gone"`

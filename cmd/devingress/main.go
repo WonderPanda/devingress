@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 
@@ -25,8 +26,8 @@ var version string
 const usage = `devingress: local HTTPS routing for projects and worktrees
 
   devingress serve                                 run the proxy (normally under systemd)
-  devingress up [dir] [--file F] [--slug S]        register dir's routes (default ./devingress.toml)
-  devingress down [dir]                            remove dir's routes
+  devingress up [dir] [--file F] [--slug S] [--name N]  register dir's routes, as set N if named
+  devingress down [dir] [--name N | --all]         remove dir's unnamed set, set N, or all
   devingress status                                list owners and their hosts
   devingress routes [--dir D] [--host H] [--json]  query registered routes
   devingress doctor [--json]                       diagnose why a URL does not load
@@ -61,8 +62,8 @@ func (c command) text() string { return "usage: devingress " + c.synopsis + "\n\
 
 var commands = map[string]command{
 	"serve":     {synopsis: "serve", help: serveHelp, run: serve},
-	"up":        {synopsis: "up [dir] [--file F] [--slug S]", help: upHelp, run: up},
-	"down":      {synopsis: "down [dir]", help: downHelp, run: down},
+	"up":        {synopsis: "up [dir] [--file F] [--slug S] [--name N]", help: upHelp, run: up},
+	"down":      {synopsis: "down [dir] [--name N | --all]", help: downHelp, run: down},
 	"status":    {synopsis: "status", help: statusHelp, run: status},
 	"routes":    {synopsis: "routes [--dir D] [--host H] [--json]", help: routesHelp, run: routes},
 	"doctor":    {synopsis: "doctor [--json]", help: doctorHelp, run: doctorCmd},
@@ -198,6 +199,16 @@ func dirArg(fs *flag.FlagSet, args []string) (string, error) {
 	return ownerDir(dir)
 }
 
+var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// checkName rejects a --name that would break the "dir [name]" display.
+func checkName(name string) error {
+	if name != "" && !nameRe.MatchString(name) {
+		return usageError{fmt.Errorf("invalid --name %q: use letters, digits, '.', '_' and '-', starting with a letter or digit", name)}
+	}
+	return nil
+}
+
 // ownerDir makes dir absolute and resolves symlinks so one checkout is one
 // owner however it was reached; a directory that is already gone keeps its
 // cleaned path.
@@ -240,9 +251,15 @@ const upHelp = `Register dir's routes, replacing any it registered before. dir d
 directory; it is made absolute and symlinks are resolved, so one checkout is one owner however it
 is reached. Flags may come before or after dir.
 
+An owner is dir plus a name. Without --name, up replaces dir's unnamed route set; with --name N,
+it registers a separate set named N, replacing only that one, so a tool can add routes to a
+checkout that already has some. Status, routes and errors show a named owner as "dir [N]".
+
 Flags:
   --file F    route file: absolute, or relative to dir (default devingress.toml)
   --slug S    value of ${slug} (default: dir's git branch, slugified)
+  --name N    register the set named N: letters, digits, '.', '_', '-', starting with a letter or
+              digit (default: the unnamed set)
 
 Reads F, the env files it names and, without --slug, dir's git branch. Takes the state
 lock, prunes owners whose directory is gone, and validates every owner's routes together with
@@ -260,22 +277,28 @@ Examples:
   devingress up
   devingress up ../my-worktree --slug pr-123
   devingress up ../my-worktree --file /path/to/shared/devingress.toml
+  devingress up --name coding --file devingress.coding.toml
 `
 
 func up(args []string, stdout io.Writer) error {
 	fs := flags("up")
 	file := fs.String("file", routefile.DefaultName, "route file: absolute, or relative to dir")
 	slug := fs.String("slug", "", "value of ${slug} (default: the git branch, slugified)")
+	name := fs.String("name", "", "register the route set with this name")
 	dir, err := dirArg(fs, args)
 	if err != nil {
+		return err
+	}
+	if err := checkName(*name); err != nil {
 		return err
 	}
 	owner, err := routefile.Load(dir, *file, *slug)
 	if err != nil {
 		return err
 	}
+	owner.Name = *name
 	res, err := ingress.Reconcile(func(owners []routefile.Owner) []routefile.Owner {
-		owners = slices.DeleteFunc(owners, func(o routefile.Owner) bool { return o.Dir == dir })
+		owners = slices.DeleteFunc(owners, func(o routefile.Owner) bool { return o.Dir == dir && o.Name == *name })
 		return append(owners, owner)
 	})
 	if err != nil {
@@ -294,6 +317,12 @@ func up(args []string, stdout io.Writer) error {
 const downHelp = `Remove dir's routes. dir defaults to the current directory and is resolved as up resolves it.
 Run it before deleting a worktree; a worktree deleted without it is pruned by the next up or down.
 
+Without flags, down removes only dir's unnamed route set: sets registered with "up --name" stay.
+
+Flags:
+  --name N    remove only the set named N
+  --all       remove every set of dir, named or not
+
 Takes the state lock, prunes owners whose directory is gone and removes dir's routes from the
 state dir. If serve is running, the remaining routes are loaded through the admin socket; if not,
 they apply when serve starts. A dir with no routes is not an error.
@@ -301,40 +330,54 @@ they apply when serve starts. A dir with no routes is not an error.
 Exit codes:
   0  removed, or dir had no routes
   1  error reading the state dir or loading the config
-  2  bad flag or argument
+  2  bad flag or argument, or --name with --all
 
-Example:
+Examples:
   devingress down
+  devingress down --name coding
+  devingress down --all
 `
 
 func down(args []string, stdout io.Writer) error {
 	fs := flags("down")
+	name := fs.String("name", "", "remove only the route set with this name")
+	all := fs.Bool("all", false, "remove every route set of dir")
 	dir, err := dirArg(fs, args)
 	if err != nil {
 		return err
 	}
-	found := false
+	if err := checkName(*name); err != nil {
+		return err
+	}
+	if *all && *name != "" {
+		return usageError{errors.New("--name and --all cannot be combined")}
+	}
+	match := func(o routefile.Owner) bool { return o.Dir == dir && (*all || o.Name == *name) }
+	var removed []routefile.Owner
 	res, err := ingress.Reconcile(func(owners []routefile.Owner) []routefile.Owner {
 		return slices.DeleteFunc(owners, func(o routefile.Owner) bool {
-			found = found || o.Dir == dir
-			return o.Dir == dir
+			if match(o) {
+				removed = append(removed, o)
+			}
+			return match(o)
 		})
 	})
 	if err != nil {
 		return err
 	}
 	report(stdout, res)
-	if !found && !slices.Contains(res.Pruned, dir) {
-		fmt.Fprintf(stdout, "  %s had no routes\n", dir)
-	} else if found {
-		fmt.Fprintf(stdout, "  removed %s\n", dir)
+	for _, o := range removed {
+		fmt.Fprintf(stdout, "  removed %s\n", o.Label())
+	}
+	if len(removed) == 0 && !slices.ContainsFunc(res.Pruned, match) {
+		fmt.Fprintf(stdout, "  %s had no routes\n", routefile.Owner{Dir: dir, Name: *name}.Label())
 	}
 	return nil
 }
 
 func report(stdout io.Writer, res ingress.Result) {
-	for _, d := range res.Pruned {
-		fmt.Fprintf(stdout, "  pruned %s (directory is gone)\n", d)
+	for _, o := range res.Pruned {
+		fmt.Fprintf(stdout, "  pruned %s (directory is gone)\n", o.Label())
 	}
 	if !res.Applied {
 		fmt.Fprintln(stdout, "  devingress is not serving; routes apply when `devingress serve` starts")
@@ -395,7 +438,7 @@ func status(args []string, stdout io.Writer) error {
 		if _, err := os.Stat(o.Dir); err != nil {
 			gone = "  [gone; pruned on next up/down]"
 		}
-		fmt.Fprintf(stdout, "\n%s  (%s, slug %s)%s\n", o.Dir, o.File, o.Slug, gone)
+		fmt.Fprintf(stdout, "\n%s  (%s, slug %s)%s\n", o.Label(), o.File, o.Slug, gone)
 		for _, s := range o.Sites {
 			fmt.Fprintf(stdout, "  %s  https://%s -> %s\n", mark(results[s.Upstream]), s.Host, s.Upstream)
 		}

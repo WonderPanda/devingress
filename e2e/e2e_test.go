@@ -225,6 +225,37 @@ func TestDown(t *testing.T) {
 	srv.waitServes(t, roots, webHost)
 }
 
+// TestNamedOwner: one checkout registers a second route set with --name; removing it leaves the
+// checkout's unnamed set serving.
+func TestNamedOwner(t *testing.T) {
+	roots := pool(t, filepath.Join(caDir, "rootCA.pem"))
+	dir := checkout(t, srv, "named-branch", webRoute())
+	coding := fmt.Sprintf("domain = %q\n\n[[route]]\nhost = \"coding-${slug}\"\nto = %q\n", domain, upstreamPort())
+	if err := os.WriteFile(filepath.Join(dir, "devingress.coding.toml"), []byte(coding), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainHost, codingHost := "web-named-branch."+domain, "coding-named-branch."+domain
+	up(t, srv, dir)
+	if out, err := srv.run(dir, "up", "--name", "coding", "--file", "devingress.coding.toml"); err != nil {
+		t.Fatalf("up --name coding: %v\n%s", err, out)
+	}
+	srv.waitServes(t, roots, mainHost)
+	srv.waitServes(t, roots, codingHost)
+
+	if out, err := srv.run(dir, "down", "--name", "coding"); err != nil || !strings.Contains(out, "removed "+dir+" [coding]") {
+		t.Fatalf("down --name coding: %v\n%s", err, out)
+	}
+	srv.waitGone(t, roots, codingHost)
+	if err := srv.serves(roots, mainHost); err != nil {
+		t.Fatalf("%s stopped serving after down --name coding: %v", mainHost, err)
+	}
+
+	if out, err := srv.run(dir, "down", "--all"); err != nil {
+		t.Fatalf("down --all: %v\n%s", err, out)
+	}
+	srv.waitGone(t, roots, mainHost)
+}
+
 func TestPrune(t *testing.T) {
 	roots := pool(t, filepath.Join(caDir, "rootCA.pem"))
 	dir := checkout(t, srv, "prune-branch", webRoute())

@@ -60,14 +60,24 @@ type PathRoute struct {
 	Proxy    string `json:"proxy,omitempty"`
 }
 
-// Owner is everything one directory contributes. Its routes live exactly as
-// long as Dir exists.
+// Owner is one route set a directory contributes, identified by (Dir, Name).
+// Name "" is the directory's unnamed owner. Its routes live exactly as long
+// as Dir exists.
 type Owner struct {
 	Dir   string      `json:"dir"`
+	Name  string      `json:"name,omitempty"`
 	File  string      `json:"file"`
 	Slug  string      `json:"slug"`
 	Sites []Site      `json:"sites"`
 	Paths []PathRoute `json:"paths"`
+}
+
+// Label is Dir, or "Dir [Name]" for a named owner.
+func (o Owner) Label() string {
+	if o.Name == "" {
+		return o.Dir
+	}
+	return o.Dir + " [" + o.Name + "]"
 }
 
 // Load reads name (absolute, or relative to dir) and resolves it. slug == ""

@@ -279,11 +279,11 @@ func checkOwners(owners []routefile.Owner) []Check {
 	var out []Check
 	for _, o := range owners {
 		if _, err := os.Stat(o.Dir); err != nil {
-			out = append(out, Check{Check: "owners", Subject: o.Dir, Status: Warn,
+			out = append(out, Check{Check: "owners", Subject: o.Label(), Status: Warn,
 				Message: "owner directory is gone", Fix: "pruned on the next up or down"})
 			continue
 		}
-		out = append(out, Check{Check: "owners", Subject: o.Dir, Status: OK, Message: "owner directory exists"})
+		out = append(out, Check{Check: "owners", Subject: o.Label(), Status: OK, Message: "owner directory exists"})
 	}
 	return out
 }

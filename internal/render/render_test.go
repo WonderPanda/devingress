@@ -69,6 +69,30 @@ func TestCaddyfileRejectsConflicts(t *testing.T) {
 	}
 }
 
+func TestCaddyfileNamedOwners(t *testing.T) {
+	text, err := Caddyfile(opts(t), []routefile.Owner{
+		{Dir: "/repo", Sites: []routefile.Site{{Host: "main.eluve.dev", Upstream: "127.0.0.1:1"}}},
+		{Dir: "/repo", Name: "coding", Sites: []routefile.Site{{Host: "billing-coding.eluve.dev", Upstream: "127.0.0.1:2"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# owner: /repo\n", "# owner: /repo [coding]\n", "(owner /repo [coding])"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Caddyfile missing %q:\n%s", want, text)
+		}
+	}
+
+	site := routefile.Site{Host: "x.eluve.dev", Upstream: "127.0.0.1:1"}
+	_, err = Caddyfile(opts(t), []routefile.Owner{
+		{Dir: "/repo", Sites: []routefile.Site{site}},
+		{Dir: "/repo", Name: "coding", Sites: []routefile.Site{site}},
+	})
+	if err == nil || err.Error() != "host x.eluve.dev is claimed by both /repo and /repo [coding]" {
+		t.Fatalf("err = %v, want a conflict naming both owners", err)
+	}
+}
+
 func TestAdaptRejectsInvalidRawCaddy(t *testing.T) {
 	text, err := Caddyfile(opts(t), []routefile.Owner{{
 		Dir:   "/a",
