@@ -180,8 +180,10 @@ strip = true
 proxy = 'header_down Cache-Control "max-age=45"'   # raw, inside reverse_proxy
 ```
 
-devingress variables are `${NAME}`; Caddy's own `{placeholder}` syntax passes
-through untouched.
+devingress variables are `${NAME}`, or `${NAME:-default}` (default when unset or
+empty) and `${NAME-default}` (only when unset), so a port that exists only as a
+docker-compose default (`${JACKSON_PORT:-5225}`) can be written the same way here.
+Caddy's own `{placeholder}` syntax passes through untouched.
 
 `devingress help routefile` prints the full `devingress.toml` reference, and
 `devingress help <command>` each command's flags, files and exit codes.
