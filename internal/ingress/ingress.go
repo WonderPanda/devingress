@@ -25,8 +25,8 @@ import (
 
 type Result struct {
 	Owners  []routefile.Owner
-	Pruned  []string
-	Applied bool // false when the server is not running; routes apply on its next start
+	Pruned  []routefile.Owner // owners dropped because their directory is gone
+	Applied bool              // false when the server is not running; routes apply on its next start
 	config  []byte
 }
 
@@ -54,7 +54,7 @@ func Reconcile(mutate func([]routefile.Owner) []routefile.Owner) (Result, error)
 	var alive []routefile.Owner
 	for _, o := range before {
 		if _, err := os.Stat(o.Dir); err != nil {
-			res.Pruned = append(res.Pruned, o.Dir)
+			res.Pruned = append(res.Pruned, o)
 			continue
 		}
 		alive = append(alive, o)
@@ -73,16 +73,17 @@ func Reconcile(mutate func([]routefile.Owner) []routefile.Owner) (Result, error)
 		res.Applied = true
 	}
 
-	keep := map[string]bool{}
+	type id struct{ dir, name string }
+	keep := map[id]bool{}
 	for _, o := range res.Owners {
-		keep[o.Dir] = true
+		keep[id{o.Dir, o.Name}] = true
 		if err := store.Save(o); err != nil {
 			return res, err
 		}
 	}
 	for _, o := range before {
-		if !keep[o.Dir] {
-			if err := store.Remove(o.Dir); err != nil {
+		if !keep[id{o.Dir, o.Name}] {
+			if err := store.Remove(o.Dir, o.Name); err != nil {
 				return res, err
 			}
 		}

@@ -58,12 +58,12 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	}
 	var paths []ownedPath
 	for _, ow := range owners {
-		fmt.Fprintf(&b, "\n# owner: %s\n", ow.Dir)
+		fmt.Fprintf(&b, "\n# owner: %s\n", ow.Label())
 		for _, s := range ow.Sites {
-			writeSite(&b, s, ow.Dir)
+			writeSite(&b, s, ow.Label())
 		}
 		for _, p := range ow.Paths {
-			paths = append(paths, ownedPath{p, ow.Dir})
+			paths = append(paths, ownedPath{p, ow.Label()})
 		}
 	}
 	if len(paths) > 0 {
@@ -165,15 +165,15 @@ func checkConflicts(owners []routefile.Owner) error {
 	for _, o := range owners {
 		for _, s := range o.Sites {
 			if prev, ok := hosts[s.Host]; ok {
-				return fmt.Errorf("host %s is claimed by both %s and %s", s.Host, prev, o.Dir)
+				return fmt.Errorf("host %s is claimed by both %s and %s", s.Host, prev, o.Label())
 			}
-			hosts[s.Host] = o.Dir
+			hosts[s.Host] = o.Label()
 		}
 		for _, p := range o.Paths {
 			if prev, ok := prefixes[p.Prefix]; ok {
-				return fmt.Errorf("path %s is claimed by both %s and %s", p.Prefix, prev, o.Dir)
+				return fmt.Errorf("path %s is claimed by both %s and %s", p.Prefix, prev, o.Label())
 			}
-			prefixes[p.Prefix] = o.Dir
+			prefixes[p.Prefix] = o.Label()
 		}
 	}
 	return nil

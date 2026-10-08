@@ -1,5 +1,5 @@
 // Package state stores each registered owner's resolved routes, one JSON file
-// per owner directory, under a lock shared by every devingress invocation.
+// per owner (directory and name), under a lock shared by every devingress invocation.
 package state
 
 import (
@@ -20,8 +20,15 @@ func New(dir string) Store { return Store{dir: dir} }
 
 func (s Store) ownersDir() string { return filepath.Join(s.dir, "owners") }
 
-func key(ownerDir string) string {
-	sum := sha256.Sum256([]byte(ownerDir))
+// key names an owner's state file. The unnamed owner keeps the key of a dir
+// alone, so state written before named owners still loads; a NUL cannot occur
+// in a path or a name, so a named key never collides with it or another name.
+func key(ownerDir, name string) string {
+	id := ownerDir
+	if name != "" {
+		id += "\x00" + name
+	}
+	sum := sha256.Sum256([]byte(id))
 	return hex.EncodeToString(sum[:6])
 }
 
@@ -42,7 +49,7 @@ func (s Store) Lock() (unlock func(), err error) {
 	return func() { f.Close() }, nil
 }
 
-// List returns every registered owner, sorted by directory.
+// List returns every registered owner, sorted by directory, then name (unnamed first).
 func (s Store) List() ([]routefile.Owner, error) {
 	entries, err := os.ReadDir(s.ownersDir())
 	if os.IsNotExist(err) {
@@ -66,7 +73,12 @@ func (s Store) List() ([]routefile.Owner, error) {
 		}
 		out = append(out, o)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Dir < out[j].Dir })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Dir != out[j].Dir {
+			return out[i].Dir < out[j].Dir
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 
@@ -78,7 +90,7 @@ func (s Store) Save(o routefile.Owner) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.ownersDir(), key(o.Dir)+".json")
+	path := filepath.Join(s.ownersDir(), key(o.Dir, o.Name)+".json")
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
@@ -86,8 +98,8 @@ func (s Store) Save(o routefile.Owner) error {
 	return os.Rename(tmp, path)
 }
 
-func (s Store) Remove(ownerDir string) error {
-	err := os.Remove(filepath.Join(s.ownersDir(), key(ownerDir)+".json"))
+func (s Store) Remove(ownerDir, name string) error {
+	err := os.Remove(filepath.Join(s.ownersDir(), key(ownerDir, name)+".json"))
 	if os.IsNotExist(err) {
 		return nil
 	}

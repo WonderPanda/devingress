@@ -202,6 +202,9 @@ func TestCheckOwners(t *testing.T) {
 	if len(checks) != 2 || checks[0].Status != OK || checks[1].Status != Warn || checks[1].Subject != gone {
 		t.Errorf("owners: %+v", checks)
 	}
+	if checks := checkOwners([]routefile.Owner{{Dir: present, Name: "coding"}}); checks[0].Subject != present+" [coding]" {
+		t.Errorf("named owner subject = %q", checks[0].Subject)
+	}
 }
 
 func TestCheckHostDNS(t *testing.T) {

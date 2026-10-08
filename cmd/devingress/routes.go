@@ -12,17 +12,20 @@ import (
 	"text/tabwriter"
 
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
 )
 
-const routesHelp = `List registered routes, grouped by owner directory: one block per owner, sorted by directory,
-with a blank line between blocks. Each block starts with the directory (your home shortened to
-~), followed by "[gone]" when it no longer exists (it is pruned on the next up or down). Under it,
-indented, one route per line, URL then upstream: sites sorted by host, then path routes sorted by
-prefix. --json prints a flat array instead, in the order documented below.
+const routesHelp = `List registered routes, grouped by owner: one block per owner, sorted by directory then
+name, with a blank line between blocks. Each block starts with the directory (your home shortened
+to ~), then " [N]" for a set registered with "up --name N", then "[gone]" when the directory no
+longer exists (it is pruned on the next up or down). Under it, indented, one route per line, URL
+then upstream: sites sorted by host, then path routes sorted by prefix. --json prints a flat array
+instead, in the order documented below.
 
 Flags:
-  --dir D     only routes owned by D, resolved as up resolves dir (absolute, symlinks resolved)
+  --dir D     only routes owned by D, every named set included, resolved as up resolves dir
+              (absolute, symlinks resolved)
   --host H    only the site whose host is exactly H
   --json      print a JSON array instead, one object per route (below)
 
@@ -30,15 +33,15 @@ Reads the state dir and config.toml: no lock and no admin socket, so it works wh
 serve is running. It shows what the last up or down registered; serve must be running for the
 URLs to answer.
 
-JSON fields, always present:
-  site  {"kind": "site", "url", "host", "upstream", "retry", "protocols", "dir", "file", "slug",
-         "gone"}
-  path  {"kind": "path", "prefix", "upstream", "strip", "dir", "file", "slug", "gone"}
+JSON fields, always present except name, which appears only for a named owner:
+  site  {"kind": "site", "url", "host", "upstream", "retry", "protocols", "dir", "name", "file",
+         "slug", "gone"}
+  path  {"kind": "path", "prefix", "upstream", "strip", "dir", "name", "file", "slug", "gone"}
   url is ready to use: "https://<host>", plus ":<https_port>" when config.toml sets one other
   than 443. retry is "" when unset, protocols a list ([] for the default h1 and h2), strip and
-  gone booleans. dir is the owner's absolute directory, file its route file and slug its
-  ${slug}. Sites come first, sorted by host then dir, then path routes, sorted by prefix then
-  dir. No match prints [].
+  gone booleans. dir is the owner's absolute directory, name its "up --name", file its route
+  file and slug its ${slug}. Sites come first, sorted by host then dir then name, then path
+  routes, sorted by prefix then dir then name. No match prints [].
 
 Exit codes:
   0  printed; with no filter, an empty registry prints nothing (or [])
@@ -59,6 +62,7 @@ type siteRoute struct {
 	Retry     string   `json:"retry"`
 	Protocols []string `json:"protocols"`
 	Dir       string   `json:"dir"`
+	Name      string   `json:"name,omitempty"`
 	File      string   `json:"file"`
 	Slug      string   `json:"slug"`
 	Gone      bool     `json:"gone"`
@@ -70,6 +74,7 @@ type pathRoute struct {
 	Upstream string `json:"upstream"`
 	Strip    bool   `json:"strip"`
 	Dir      string `json:"dir"`
+	Name     string `json:"name,omitempty"`
 	File     string `json:"file"`
 	Slug     string `json:"slug"`
 	Gone     bool   `json:"gone"`
@@ -78,6 +83,7 @@ type pathRoute struct {
 // ownerRoutes is one owner's routes that pass the filters.
 type ownerRoutes struct {
 	dir   string
+	name  string
 	gone  bool
 	sites []siteRoute
 	paths []pathRoute
@@ -111,25 +117,25 @@ func routes(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// One group per owner with matching routes, in the dir order List returns.
+	// One group per owner with matching routes, in the dir, name order List returns.
 	var groups []ownerRoutes
 	for _, o := range owners {
 		if dir != "" && o.Dir != dir {
 			continue
 		}
 		_, statErr := os.Stat(o.Dir)
-		g := ownerRoutes{dir: o.Dir, gone: statErr != nil}
+		g := ownerRoutes{dir: o.Dir, name: o.Name, gone: statErr != nil}
 		for _, s := range o.Sites {
 			if *host != "" && s.Host != *host {
 				continue
 			}
 			g.sites = append(g.sites, siteRoute{Kind: "site", URL: siteURL(s.Host, cfg.HTTPSPort), Host: s.Host, Upstream: s.Upstream,
-				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: g.gone})
+				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, Name: o.Name, File: o.File, Slug: o.Slug, Gone: g.gone})
 		}
 		if *host == "" { // --host selects a site; path routes have no host
 			for _, p := range o.Paths {
 				g.paths = append(g.paths, pathRoute{Kind: "path", Prefix: p.Prefix, Upstream: p.Upstream, Strip: p.Strip,
-					Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: g.gone})
+					Dir: o.Dir, Name: o.Name, File: o.File, Slug: o.Slug, Gone: g.gone})
 			}
 		}
 		if len(g.sites)+len(g.paths) > 0 {
@@ -142,8 +148,12 @@ func routes(args []string, stdout io.Writer) error {
 		for _, g := range groups {
 			sites, paths = append(sites, g.sites...), append(paths, g.paths...)
 		}
-		slices.SortFunc(sites, func(a, b siteRoute) int { return cmp.Or(cmp.Compare(a.Host, b.Host), cmp.Compare(a.Dir, b.Dir)) })
-		slices.SortFunc(paths, func(a, b pathRoute) int { return cmp.Or(cmp.Compare(a.Prefix, b.Prefix), cmp.Compare(a.Dir, b.Dir)) })
+		slices.SortFunc(sites, func(a, b siteRoute) int {
+			return cmp.Or(cmp.Compare(a.Host, b.Host), cmp.Compare(a.Dir, b.Dir), cmp.Compare(a.Name, b.Name))
+		})
+		slices.SortFunc(paths, func(a, b pathRoute) int {
+			return cmp.Or(cmp.Compare(a.Prefix, b.Prefix), cmp.Compare(a.Dir, b.Dir), cmp.Compare(a.Name, b.Name))
+		})
 		all := make([]any, 0, len(sites)+len(paths))
 		for _, s := range sites {
 			all = append(all, s)
@@ -165,7 +175,7 @@ func routes(args []string, stdout io.Writer) error {
 			if i > 0 {
 				fmt.Fprintln(tw)
 			}
-			fmt.Fprintf(tw, "%s%s\n", tildeHome(g.dir, home), goneMark(g.gone))
+			fmt.Fprintf(tw, "%s%s\n", routefile.Owner{Dir: tildeHome(g.dir, home), Name: g.name}.Label(), goneMark(g.gone))
 			slices.SortFunc(g.sites, func(a, b siteRoute) int { return cmp.Compare(a.Host, b.Host) })
 			slices.SortFunc(g.paths, func(a, b pathRoute) int { return cmp.Compare(a.Prefix, b.Prefix) })
 			for _, s := range g.sites {

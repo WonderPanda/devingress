@@ -160,6 +160,17 @@ devingress dns setup example.dev   # once: resolve *.example.dev to loopback
 Every `up`/`down` also removes the routes of checkouts that no longer exist, so
 a worktree deleted with `rm -rf` is cleaned up on the next call.
 
+A tool that adds routes at runtime to a checkout that already registered some
+gives its set a name, so it neither replaces nor removes the checkout's own:
+
+```sh
+devingress up --name coding --file devingress.coding.toml   # alongside this checkout's routes
+devingress down --name coding                               # remove only that set
+```
+
+`down` alone removes only the checkout's unnamed set and leaves named sets in
+place; `down --all` removes every set the checkout registered.
+
 ### Beyond host-to-port
 
 ```toml
