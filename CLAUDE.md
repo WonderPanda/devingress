@@ -11,7 +11,8 @@ the route file format.
   routefile` lives in `internal/routefile/help.go`.
 - `internal/routefile/`: parses `devingress.toml` and expands `${VARS}`.
 - `internal/render/`: merges every owner's routes into one Caddy config.
-- `internal/state/`: one JSON file per registered checkout, under `$XDG_STATE_HOME/devingress`.
+- `internal/state/`: one JSON file per registered owner (checkout plus `up --name`), under
+  `$XDG_STATE_HOME/devingress`.
 - `internal/ingress/`: runs Caddy and reloads it through the admin socket.
 - `internal/service/`: the systemd system unit `devingress service install` writes, and its commands.
 - `internal/localdns/`: serve's wildcard DNS listener (A 127.0.0.1, AAAA ::1 for every name).
