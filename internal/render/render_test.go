@@ -1,8 +1,11 @@
 package render
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/caddyserver/caddy/v2"
 
 	"github.com/WonderPanda/devingress/internal/routefile"
 )
@@ -77,4 +80,121 @@ func TestAdaptRejectsInvalidRawCaddy(t *testing.T) {
 	if _, err := Adapt(text); err == nil {
 		t.Fatal("want an unknown directive to fail validation")
 	}
+}
+
+func TestCaddyfileSiteNamesUnreachableUpstream(t *testing.T) {
+	text, err := Caddyfile(opts(t), []routefile.Owner{{
+		Dir:   "/w/orchard.updates",
+		Sites: []routefile.Site{{Host: "orchard-updates.eluve.dev", Upstream: "127.0.0.1:15766", Retry: "5s"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\thandle_errors 502 503 504 {\n" +
+		"\t\theader Content-Type \"text/plain; charset=utf-8\"\n" +
+		"\t\trespond \"devingress: nothing answered at 127.0.0.1:15766 for orchard-updates.eluve.dev (owner /w/orchard.updates). " +
+		"Start its dev server, or run \\\"devingress status\\\".\" {err.status_code}\n" +
+		"\t}\n"
+	if !strings.Contains(text, want) {
+		t.Errorf("Caddyfile missing\n%s\nin:\n%s", want, text)
+	}
+	if _, err := Adapt(text); err != nil {
+		t.Fatalf("adapt: %v\n%s", err, text)
+	}
+}
+
+func TestCaddyfilePathsNameUnreachableUpstream(t *testing.T) {
+	text, err := Caddyfile(opts(t), []routefile.Owner{
+		{Dir: "/w/a", Paths: []routefile.PathRoute{{Prefix: "/auth-a", Upstream: "127.0.0.1:10296", Strip: true}}},
+		{Dir: "/w/b", Paths: []routefile.PathRoute{{Prefix: "/api-b", Upstream: "127.0.0.1:10297"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(text, "handle_errors"); n != 1 {
+		t.Errorf("%d handle_errors blocks, want 1:\n%s", n, text)
+	}
+	_, errs, _ := strings.Cut(text, "handle_errors 502 503 504 {\n")
+	for _, want := range []string{
+		"\t\thandle /auth-a/* {\n\t\t\theader Content-Type \"text/plain; charset=utf-8\"\n" +
+			"\t\t\trespond \"devingress: nothing answered at 127.0.0.1:10296 for /auth-a/* (owner /w/a).",
+		"\t\thandle /api-b/* {\n\t\t\theader Content-Type \"text/plain; charset=utf-8\"\n" +
+			"\t\t\trespond \"devingress: nothing answered at 127.0.0.1:10297 for /api-b/* (owner /w/b).",
+	} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("handle_errors missing\n%s\nin:\n%s", want, text)
+		}
+	}
+	if _, err := Adapt(text); err != nil {
+		t.Fatalf("adapt: %v\n%s", err, text)
+	}
+}
+
+func TestCaddyfileLeavesRawCaddyAlone(t *testing.T) {
+	body := "reverse_proxy 127.0.0.1:10301 {\n\theader_down -Access-Control-Allow-Origin\n}\n"
+	text, err := Caddyfile(opts(t), []routefile.Owner{{
+		Dir:   "/w/a",
+		Sites: []routefile.Site{{Host: "medplum.eluve.dev", Upstream: "127.0.0.1:10301", Caddy: body}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "medplum.eluve.dev {\n"+body+"}\n") || strings.Contains(text, "handle_errors") {
+		t.Errorf("raw caddy body changed:\n%s", text)
+	}
+	if _, err := Adapt(text); err != nil {
+		t.Fatalf("adapt: %v\n%s", err, text)
+	}
+}
+
+// The owner dir lands in a quoted token that Caddy placeholder-expands per
+// request, so a quote or a known placeholder name must come out as written.
+func TestCaddyfileUnreachableBodyIsLiteral(t *testing.T) {
+	dir := `/w/a "b" {path}`
+	text, err := Caddyfile(opts(t), []routefile.Owner{{
+		Dir:   dir,
+		Sites: []routefile.Site{{Host: "x.eluve.dev", Upstream: "127.0.0.1:1"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Adapt(text)
+	if err != nil {
+		t.Fatalf("adapt: %v\n%s", err, text)
+	}
+	var tree any
+	if err := json.Unmarshal(cfg, &tree); err != nil {
+		t.Fatal(err)
+	}
+	bodies := staticBodies(tree)
+	if len(bodies) != 1 {
+		t.Fatalf("%d static_response bodies, want 1: %q", len(bodies), bodies)
+	}
+	repl := caddy.NewEmptyReplacer()
+	repl.Set("path", "/requested")
+	got := repl.ReplaceAll(bodies[0], "")
+	want := `devingress: nothing answered at 127.0.0.1:1 for x.eluve.dev (owner ` + dir + `). Start its dev server, or run "devingress status".`
+	if got != want {
+		t.Errorf("served body\n%s\nwant\n%s", got, want)
+	}
+}
+
+func staticBodies(v any) []string {
+	var out []string
+	switch v := v.(type) {
+	case map[string]any:
+		if v["handler"] == "static_response" {
+			if body, ok := v["body"].(string); ok {
+				out = append(out, body)
+			}
+		}
+		for _, c := range v {
+			out = append(out, staticBodies(c)...)
+		}
+	case []any:
+		for _, c := range v {
+			out = append(out, staticBodies(c)...)
+		}
+	}
+	return out
 }

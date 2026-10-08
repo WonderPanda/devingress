@@ -52,17 +52,23 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	}
 	b.WriteString("}\n")
 
-	var paths []routefile.PathRoute
+	type ownedPath struct {
+		routefile.PathRoute
+		Owner string
+	}
+	var paths []ownedPath
 	for _, ow := range owners {
 		fmt.Fprintf(&b, "\n# owner: %s\n", ow.Dir)
 		for _, s := range ow.Sites {
-			writeSite(&b, s)
+			writeSite(&b, s, ow.Dir)
 		}
-		paths = append(paths, ow.Paths...)
+		for _, p := range ow.Paths {
+			paths = append(paths, ownedPath{p, ow.Dir})
+		}
 	}
 	if len(paths) > 0 {
 		// Longest prefix first so a nested prefix is never shadowed.
-		slices.SortFunc(paths, func(a, b routefile.PathRoute) int { return len(b.Prefix) - len(a.Prefix) })
+		slices.SortFunc(paths, func(a, b ownedPath) int { return len(b.Prefix) - len(a.Prefix) })
 		fmt.Fprintf(&b, "\nhttp://:%d {\n", o.HTTPPort)
 		for _, p := range paths {
 			dir := "handle"
@@ -73,12 +79,21 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 			writeProxy(&b, "\t\t", p.Upstream, "", p.Proxy)
 			b.WriteString("\t}\n")
 		}
+		// handle_errors is site-level, so one block holds every prefix. It
+		// matches the original path, even for a handle_path route.
+		b.WriteString("\thandle_errors 502 503 504 {\n")
+		for _, p := range paths {
+			fmt.Fprintf(&b, "\t\thandle %s/* {\n", p.Prefix)
+			writeUnreachable(&b, "\t\t\t", p.Upstream, p.Prefix+"/*", p.Owner)
+			b.WriteString("\t\t}\n")
+		}
+		b.WriteString("\t}\n")
 		b.WriteString("}\n")
 	}
 	return b.String(), nil
 }
 
-func writeSite(b *strings.Builder, s routefile.Site) {
+func writeSite(b *strings.Builder, s routefile.Site, owner string) {
 	fmt.Fprintf(b, "%s {\n", s.Host)
 	if len(s.Protocols) > 0 {
 		fmt.Fprintf(b, "\ttls internal {\n\t\talpn %s\n\t}\n", strings.Join(alpn(s.Protocols), " "))
@@ -90,9 +105,25 @@ func writeSite(b *strings.Builder, s routefile.Site) {
 		}
 	} else {
 		writeProxy(b, "\t", s.Upstream, s.Retry, s.Proxy)
+		b.WriteString("\thandle_errors 502 503 504 {\n")
+		writeUnreachable(b, "\t\t", s.Upstream, s.Host, owner)
+		b.WriteString("\t}\n")
 	}
 	b.WriteString("}\n")
 }
+
+// writeUnreachable answers a proxy error with a plain-text body naming the
+// upstream, what it serves and its owner, keeping Caddy's status.
+func writeUnreachable(b *strings.Builder, indent, upstream, what, owner string) {
+	msg := fmt.Sprintf("devingress: nothing answered at %s for %s (owner %s). Start its dev server, or run \"devingress status\".",
+		upstream, what, owner)
+	fmt.Fprintf(b, "%sheader Content-Type \"text/plain; charset=utf-8\"\n", indent)
+	fmt.Fprintf(b, "%srespond \"%s\" {err.status_code}\n", indent, quoteLiteral.Replace(msg))
+}
+
+// quoteLiteral escapes text for a double-quoted Caddyfile token whose value
+// is placeholder-expanded at request time, so it comes out as written.
+var quoteLiteral = strings.NewReplacer(`"`, `\"`, "{", `\{`, "}", `\}`)
 
 func writeProxy(b *strings.Builder, indent, upstream, retry, raw string) {
 	if retry == "" && raw == "" {
