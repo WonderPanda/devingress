@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/launchd"
+	"github.com/WonderPanda/devingress/internal/macresolver"
 	"github.com/WonderPanda/devingress/internal/probe"
 	"github.com/WonderPanda/devingress/internal/resolved"
 	"github.com/WonderPanda/devingress/internal/routefile"
@@ -64,6 +67,7 @@ type Deps struct {
 	Executable func() (string, error)
 	Exchange   func(m *dns.Msg, addr string) (*dns.Msg, error)
 	Glob       func(pattern string) ([]string, error)
+	GOOS       string // "darwin" checks /etc/resolver and the LaunchAgent; anything else, resolved and systemd
 }
 
 // DefaultDeps reach the real network, filesystem and this machine's
@@ -94,6 +98,7 @@ func DefaultDeps() Deps {
 			return r, err
 		},
 		Glob: filepath.Glob,
+		GOOS: runtime.GOOS,
 	}
 }
 
@@ -339,19 +344,31 @@ func dnsFix(host string) string {
 	return fmt.Sprintf("devingress dns setup %s, or point DNS at 127.0.0.1 (dnsmasq, /etc/hosts, *.localhost)", domain)
 }
 
-// checkDNSRoutes warns about each live host that neither a devingress drop-in routes to the DNS
-// listener nor resolves to loopback some other way.
+// checkDNSRoutes warns about each live host that neither a devingress drop-in (on macOS, a
+// devingress file in /etc/resolver) routes to the DNS listener nor resolves to loopback some
+// other way.
 func checkDNSRoutes(deps Deps, owners []routefile.Owner) []Check {
-	routed := map[string]string{} // domain -> the devingress drop-in routing it
-	paths, _ := deps.Glob(filepath.Join(resolved.Dir, resolved.DropInName("*")))
-	for _, p := range paths {
-		data, err := deps.ReadFile(p)
-		if err != nil {
-			continue
+	routed := map[string]string{} // domain -> the devingress file routing it
+	noun, dir := "drop-in", resolved.Dir
+	if deps.GOOS == "darwin" {
+		noun, dir = "resolver file", macresolver.Dir
+		paths, _ := deps.Glob(filepath.Join(macresolver.Dir, "*"))
+		for _, p := range paths {
+			if data, err := deps.ReadFile(p); err == nil && macresolver.Ours(string(data)) {
+				routed[filepath.Base(p)] = p
+			}
 		}
-		domain := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "devingress-"), ".conf")
-		if resolved.RoutesDomain(string(data), domain) {
-			routed[domain] = p
+	} else {
+		paths, _ := deps.Glob(filepath.Join(resolved.Dir, resolved.DropInName("*")))
+		for _, p := range paths {
+			data, err := deps.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			domain := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "devingress-"), ".conf")
+			if resolved.RoutesDomain(string(data), domain) {
+				routed[domain] = p
+			}
 		}
 	}
 
@@ -366,13 +383,13 @@ func checkDNSRoutes(deps Deps, owners []routefile.Owner) []Check {
 				continue
 			}
 			seen[s.Host] = true
-			out = append(out, checkDNSRoute(deps, s.Host, routed))
+			out = append(out, checkDNSRoute(deps, s.Host, routed, noun, dir))
 		}
 	}
 	return out
 }
 
-func checkDNSRoute(deps Deps, host string, routed map[string]string) Check {
+func checkDNSRoute(deps Deps, host string, routed map[string]string, noun, dir string) Check {
 	for d := host; d != ""; {
 		if p, ok := routed[d]; ok {
 			return Check{Check: "dns", Subject: host, Status: OK, Message: "routed to the DNS listener by " + p}
@@ -380,10 +397,10 @@ func checkDNSRoute(deps Deps, host string, routed map[string]string) Check {
 		_, d, _ = strings.Cut(d, ".")
 	}
 	if ips, err := deps.Lookup(host); err == nil && slices.ContainsFunc(ips, net.IP.IsLoopback) {
-		return Check{Check: "dns", Subject: host, Status: OK, Message: "no devingress drop-in, but resolves to loopback"}
+		return Check{Check: "dns", Subject: host, Status: OK, Message: "no devingress " + noun + ", but resolves to loopback"}
 	}
 	return Check{Check: "dns", Subject: host, Status: Warn,
-		Message: "no devingress drop-in in " + resolved.Dir + " routes it, and it does not resolve to loopback",
+		Message: "no devingress " + noun + " in " + dir + " routes it, and it does not resolve to loopback",
 		Fix:     dnsFix(host)}
 }
 
@@ -444,6 +461,9 @@ func checkHostTLS(deps Deps, host string, httpsPort int, rootPool *x509.CertPool
 }
 
 func checkService(deps Deps) []Check {
+	if deps.GOOS == "darwin" {
+		return checkLaunchAgent(deps)
+	}
 	data, err := deps.ReadFile(service.UnitPath)
 	if err != nil {
 		return nil // not installed: nothing to check
@@ -464,6 +484,36 @@ func checkService(deps Deps) []Check {
 			Fix:     `rerun "devingress service install"`}}
 	}
 	return []Check{{Check: "service", Subject: service.UnitPath, Status: OK, Message: "ExecStart matches the running binary"}}
+}
+
+// checkLaunchAgent is checkService on macOS: the LaunchAgent's ProgramArguments against the
+// running binary.
+func checkLaunchAgent(deps Deps) []Check {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	path := launchd.PlistPath(home)
+	data, err := deps.ReadFile(path)
+	if err != nil {
+		return nil // not installed: nothing to check
+	}
+	args, _ := launchd.ProgramArguments(data)
+	exe, exeErr := deps.Executable()
+	want := []string{exe, "serve"}
+	switch {
+	case len(args) == 0:
+		return []Check{{Check: "service", Subject: path, Status: Warn,
+			Message: "no ProgramArguments found", Fix: `rerun "devingress service install"`}}
+	case exeErr != nil:
+		return []Check{{Check: "service", Subject: path, Status: Warn,
+			Message: exeErr.Error(), Fix: `rerun "devingress service install"`}}
+	case !slices.Equal(args, want):
+		return []Check{{Check: "service", Subject: path, Status: Warn,
+			Message: fmt.Sprintf("ProgramArguments is %q, not the running binary (%q)", args, want),
+			Fix:     `rerun "devingress service install"`}}
+	}
+	return []Check{{Check: "service", Subject: path, Status: OK, Message: "ProgramArguments matches the running binary"}}
 }
 
 func unitExecStart(unit string) string {
