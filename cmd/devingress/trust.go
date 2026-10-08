@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"strings"
 
 	"github.com/smallstep/truststore"
 
@@ -13,7 +15,7 @@ import (
 	"github.com/WonderPanda/devingress/internal/ingress"
 )
 
-const trustHelp = `Install the root certificate devingress signs with into this machine's trust stores, so
+const linuxTrustHelp = `Install the root certificate devingress signs with into this machine's trust stores, so
 browsers and tools trust its certificates. Run it once; mkcert is not needed.
 
 The root is the one serve uses: rootCA.pem in ca_root, which defaults to mkcert's CAROOT. When that
@@ -43,7 +45,29 @@ Examples:
   NODE_EXTRA_CA_CERTS=$(devingress trust --path) npm run dev
 `
 
-const trustStores = "the system store (via sudo), NSS (~/.pki/nssdb, Firefox) and Java (when JAVA_HOME is set)"
+const linuxTrustStores = "the system store (via sudo), NSS (~/.pki/nssdb, Firefox) and Java (when JAVA_HOME is set)"
+
+// What trust installs into differs on macOS, where Safari and Chrome use the System keychain.
+const (
+	linuxSystemNSS = `  system   the OS store, through sudo (asks for your password)
+  NSS      ~/.pki/nssdb (Chrome, Chromium) and Firefox profiles, when certutil is installed
+`
+	darwinSystemNSS = `  system   the System keychain (Safari, Chrome, curl), through sudo (asks for your password)
+  NSS      Firefox profiles, when certutil is installed (brew install nss)
+`
+	darwinTrustStores = "the System keychain (via sudo; Safari, Chrome, curl), NSS (Firefox, when certutil is " +
+		"installed) and Java (when JAVA_HOME is set)"
+)
+
+var trustHelp, trustStores = trustText(runtime.GOOS)
+
+// trustText is trust's help and the stores it names, for goos.
+func trustText(goos string) (help, stores string) {
+	if goos != "darwin" {
+		return linuxTrustHelp, linuxTrustStores
+	}
+	return strings.Replace(linuxTrustHelp, linuxSystemNSS, darwinSystemNSS, 1), darwinTrustStores
+}
 
 // installRoot and uninstallRoot change this machine's trust stores. Tests
 // replace them and must never reach the real ones.
