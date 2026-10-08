@@ -12,14 +12,17 @@ import (
 	"github.com/WonderPanda/devingress/internal/service"
 )
 
-// fakeDNS replaces everything dns touches: resolved runs, the drop-in dir holds confs, resolved's
-// global servers are *global, and the runner records each step instead of running it.
+// fakeDNS replaces everything dns touches, on Linux: resolved runs, the drop-in dir holds confs,
+// resolved's global servers are *global, and the runner records each step instead of running it.
 func fakeDNS(t *testing.T, confs map[string]string) (global *[]string, ran *[]service.Step) {
 	t.Helper()
 	isolate(t)
 	global, ran = &[]string{}, &[]service.Step{}
-	supported, readConfs, servers, run := dnsSupported, dnsConfs, dnsGlobalServers, dnsRun
-	t.Cleanup(func() { dnsSupported, dnsConfs, dnsGlobalServers, dnsRun = supported, readConfs, servers, run })
+	goos, supported, readConfs, servers, run := hostOS, dnsSupported, dnsConfs, dnsGlobalServers, dnsRun
+	t.Cleanup(func() {
+		hostOS, dnsSupported, dnsConfs, dnsGlobalServers, dnsRun = goos, supported, readConfs, servers, run
+	})
+	hostOS = "linux"
 	dnsSupported = func() error { return nil }
 	dnsConfs = func() (map[string]string, error) { return confs, nil }
 	dnsGlobalServers = func() ([]string, error) { return slices.Clone(*global), nil }

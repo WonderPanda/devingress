@@ -13,9 +13,9 @@ import (
 	"github.com/WonderPanda/devingress/internal/service"
 )
 
-// fakeService replaces everything service touches with a dev account whose home is a temp dir,
-// an executable reached through a symlink, and a runner that records each step instead of
-// running it. It returns the home, the executable's real path, and the recorded steps.
+// fakeService replaces everything service touches, on Linux, with a dev account whose home is a
+// temp dir, an executable reached through a symlink, and a runner that records each step instead
+// of running it. It returns the home, the executable's real path, and the recorded steps.
 func fakeService(t *testing.T) (home, exe string, ran *[]service.Step) {
 	t.Helper()
 	isolate(t)
@@ -38,10 +38,11 @@ func fakeService(t *testing.T) (home, exe string, ran *[]service.Step) {
 		t.Fatal(err)
 	}
 	ran = &[]service.Step{}
-	supported, account, executable, run := serviceSupported, serviceAccount, serviceExecutable, serviceRun
+	goos, supported, account, executable, run := hostOS, serviceSupported, serviceAccount, serviceExecutable, serviceRun
 	t.Cleanup(func() {
-		serviceSupported, serviceAccount, serviceExecutable, serviceRun = supported, account, executable, run
+		hostOS, serviceSupported, serviceAccount, serviceExecutable, serviceRun = goos, supported, account, executable, run
 	})
+	hostOS = "linux"
 	serviceSupported = func() error { return nil }
 	serviceAccount = func() (service.Account, error) {
 		return service.Account{Name: "dev", Group: "devs", UID: "1000", GID: "1001", Home: home}, nil
