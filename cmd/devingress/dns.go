@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -12,16 +13,17 @@ import (
 	"strings"
 
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/macresolver"
 	"github.com/WonderPanda/devingress/internal/resolved"
 	"github.com/WonderPanda/devingress/internal/service"
 )
 
-const dnsHelp = `Route a domain's lookups to serve's DNS listener through systemd-resolved, so every name under
-it resolves to loopback (A 127.0.0.1, AAAA ::1) with no per-host entries. Privileges are needed
-once, here; up and down never touch DNS. serve listens on dns_listen in config.toml (default
-127.0.0.1:15353; "" turns it off).
+const dnsHelp = `Route a domain's lookups to serve's DNS listener, so every name under it resolves to loopback
+(A 127.0.0.1, AAAA ::1) with no per-host entries: through systemd-resolved on Linux, through
+/etc/resolver on macOS. Privileges are needed once, here; up and down never touch DNS. serve
+listens on dns_listen in config.toml (default 127.0.0.1:15353; "" turns it off).
 
-setup writes /etc/systemd/resolved.conf.d/devingress-<domain>.conf:
+On Linux, setup writes /etc/systemd/resolved.conf.d/devingress-<domain>.conf:
 
   [Resolve]
   DNS=<dns_listen>
@@ -34,22 +36,31 @@ resolved asks a global-scope routing domain's servers in that order, so a global
 first (NXDOMAIN) and the query never reaches devingress. --reset-global-dns clears the global list
 in the drop-in instead; that affects every lookup on the machine: names outside <domain> then
 resolve only through per-link DNS (e.g. from DHCP). When the drop-in already exists, setup changes
-nothing.
+nothing. remove deletes the drop-in and restarts systemd-resolved.
 
-remove deletes the drop-in and restarts systemd-resolved.
+On macOS, setup writes /etc/resolver/<domain>:
+
+  # Written by devingress: routes <domain> to serve's DNS listener.
+  nameserver <dns_listen's host>
+  port <dns_listen's port>
+
+and flushes mDNSResponder's cache ("killall -HUP mDNSResponder"). A per-domain resolver wins for
+its domain, so there are no global servers to clear, and --reset-global-dns is a usage error. When
+the file already exists, setup changes nothing if devingress wrote it, and exits 1 otherwise.
+remove deletes the file, only if devingress wrote it, and flushes the cache.
 
 Run it as your own user: it calls sudo for each privileged command, and prints each one before it
-runs. Containers do not use the host's resolved; give them extra_hosts.
+runs. Containers do not use the host's resolver; give them extra_hosts.
 
 Flags:
-  --reset-global-dns    setup: clear resolved's global DNS servers in the drop-in
-  --print               print the drop-in and the commands as a shell script; change nothing.
+  --reset-global-dns    setup, Linux: clear resolved's global DNS servers in the drop-in
+  --print               print the file and the commands as a shell script; change nothing.
                         The checks above still run, so it refuses whatever a real run refuses.
 
 Exit codes:
   0  set up, removed, already in place, or printed
-  1  no systemd-resolved, the domain is already routed elsewhere, global DNS servers without
-     --reset-global-dns, or a command failed
+  1  no systemd-resolved on Linux, the domain is already routed elsewhere, global DNS servers
+     without --reset-global-dns, or a command failed
   2  bad flag or argument
 
 Examples:
@@ -87,6 +98,8 @@ var (
 		return resolved.GlobalServers(string(out))
 	}
 	dnsRun = service.Exec
+	// dnsReadResolver reads a file in macresolver.Dir.
+	dnsReadResolver = os.ReadFile
 )
 
 func dnsCmd(args []string, stdout io.Writer) error {
@@ -106,9 +119,16 @@ func dnsCmd(args []string, stdout io.Writer) error {
 	if *reset && pos[0] != "setup" {
 		return usageError{errors.New("--reset-global-dns only applies to setup")}
 	}
+	if *reset && hostOS == "darwin" {
+		return usageError{errors.New("--reset-global-dns only applies to systemd-resolved; " +
+			"macOS asks /etc/resolver/<domain> before any global server")}
+	}
 	domain, err := resolved.Domain(pos[1])
 	if err != nil {
 		return usageError{err}
+	}
+	if hostOS == "darwin" {
+		return resolverCmd(pos[0], domain, *printOnly, stdout)
 	}
 	if err := dnsSupported(); err != nil {
 		return fmt.Errorf("%w\nRoute %s with dnsmasq instead, e.g. in /etc/dnsmasq.d/devingress.conf:\n"+
@@ -167,4 +187,47 @@ func dnsCmd(args []string, stdout io.Writer) error {
 			"through per-link DNS (e.g. from DHCP).", strings.Join(servers, " "), domain))
 	}
 	return runSteps(resolved.Setup(domain, resolved.DropIn(cfg.DNSListen, domain, *reset)), *printOnly, dnsRun, stdout)
+}
+
+// resolverCmd sets up or removes domain's /etc/resolver file: dns on darwin.
+func resolverCmd(sub, domain string, printOnly bool, stdout io.Writer) error {
+	path := macresolver.Path(domain)
+	data, err := dnsReadResolver(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	exists, ours := err == nil, err == nil && macresolver.Ours(string(data))
+
+	if sub == "remove" {
+		switch {
+		case !exists:
+			note(stdout, printOnly, path+" does not exist; nothing to remove.")
+			return nil
+		case !ours:
+			return fmt.Errorf("%s was not written by devingress; remove it yourself if you mean to", path)
+		}
+		return runSteps(macresolver.Remove(domain), printOnly, dnsRun, stdout)
+	}
+
+	if ours {
+		note(stdout, printOnly, fmt.Sprintf("%s already routes %s; nothing to do. "+
+			`"devingress dns remove %[2]s" first to change it.`, path, domain))
+		return nil
+	}
+	if exists {
+		return fmt.Errorf("%s already routes %s; remove that routing first, or keep using it", path, domain)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.DNSListen == "" {
+		return fmt.Errorf("dns_listen is empty in %s, so serve answers no DNS; set it (default %q)",
+			config.ConfigFile(), config.DefaultDNSListen)
+	}
+	file, err := macresolver.File(cfg.DNSListen, domain)
+	if err != nil {
+		return err
+	}
+	return runSteps(macresolver.Setup(domain, file), printOnly, dnsRun, stdout)
 }
