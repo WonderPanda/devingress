@@ -1,6 +1,7 @@
 package routefile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,4 +111,72 @@ func TestSlugify(t *testing.T) {
 			t.Errorf("Slugify(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestLoadPaths(t *testing.T) {
+	const toml = `env = [%q]
+
+[[route]]
+host = "web"
+to = "${PORT}"
+`
+	route := func(env string) string { return fmt.Sprintf(toml, env) }
+	port := func(t *testing.T, o Owner, want string) {
+		t.Helper()
+		if len(o.Sites) != 1 || o.Sites[0].Upstream != "127.0.0.1:"+want {
+			t.Errorf("sites = %+v, want upstream 127.0.0.1:%s", o.Sites, want)
+		}
+	}
+
+	t.Run("absolute route file and env outside dir", func(t *testing.T) {
+		dir := write(t, nil)
+		elsewhere := write(t, map[string]string{".env": "PORT=1001\n"})
+		other := write(t, map[string]string{"devingress.toml": route(filepath.Join(elsewhere, ".env"))})
+		name := filepath.Join(other, "devingress.toml")
+		o, err := Load(dir, name, "s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.File != name || o.Dir != dir {
+			t.Errorf("File = %q, Dir = %q; want %q, %q", o.File, o.Dir, name, dir)
+		}
+		port(t, o, "1001")
+	})
+
+	t.Run("absolute env outside dir", func(t *testing.T) {
+		elsewhere := write(t, map[string]string{".env": "PORT=1004\n"})
+		dir := write(t, map[string]string{"devingress.toml": route(filepath.Join(elsewhere, ".env"))})
+		o, err := Load(dir, DefaultName, "s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port(t, o, "1004")
+	})
+
+	t.Run("relative route file resolves against dir", func(t *testing.T) {
+		dir := write(t, map[string]string{".env": "PORT=1002\n"})
+		other := write(t, map[string]string{"devingress.toml": route(".env")})
+		rel, err := filepath.Rel(dir, filepath.Join(other, "devingress.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		o, err := Load(dir, rel, "s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if o.File != rel {
+			t.Errorf("File = %q, want %q", o.File, rel)
+		}
+		port(t, o, "1002")
+	})
+
+	t.Run("relative env resolves against dir when the route file is elsewhere", func(t *testing.T) {
+		dir := write(t, map[string]string{".env": "PORT=1003\n"})
+		other := write(t, map[string]string{"devingress.toml": route(".env"), ".env": "PORT=9999\n"})
+		o, err := Load(dir, filepath.Join(other, "devingress.toml"), "s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port(t, o, "1003")
+	})
 }

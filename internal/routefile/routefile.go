@@ -70,10 +70,10 @@ type Owner struct {
 	Paths []PathRoute `json:"paths"`
 }
 
-// Load reads <dir>/<name> and resolves it. slug == "" derives it from the
-// directory's git branch.
+// Load reads name (absolute, or relative to dir) and resolves it. slug == ""
+// derives it from the directory's git branch.
 func Load(dir, name, slug string) (Owner, error) {
-	path := filepath.Join(dir, name)
+	path := resolvePath(dir, name)
 	var f file
 	if _, err := toml.DecodeFile(path, &f); err != nil {
 		return Owner{}, fmt.Errorf("%s: %w", path, err)
@@ -86,7 +86,7 @@ func Load(dir, name, slug string) (Owner, error) {
 	}
 	vars := map[string]string{}
 	for _, e := range f.Env {
-		if err := readEnvFile(filepath.Join(dir, e), vars); err != nil {
+		if err := readEnvFile(resolvePath(dir, e), vars); err != nil {
 			return Owner{}, fmt.Errorf("%s: env %q: %w", path, e, err)
 		}
 	}
@@ -144,6 +144,14 @@ func Load(dir, name, slug string) (Owner, error) {
 		o.Paths = append(o.Paths, PathRoute{Prefix: strings.TrimSuffix(prefix, "/"), Upstream: up, Strip: fp.Strip, Proxy: proxy})
 	}
 	return o, nil
+}
+
+// resolvePath: an absolute path as-is, a relative one against dir.
+func resolvePath(dir, p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(dir, p)
 }
 
 func orEmpty(err error, fallback string) string {
