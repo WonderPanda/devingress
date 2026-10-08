@@ -18,6 +18,8 @@ the route file format.
 - `internal/resolved/`: the systemd-resolved drop-in `devingress dns setup` writes, and its commands.
 - `internal/config/`: host settings (`~/.config/devingress/config.toml`: `bind`, `http_port`,
   `https_port`, `ca_root`, `dns_listen`) and the XDG paths.
+- `internal/probe/`: dials route upstreams in parallel (up, down or unknown) for `status` and
+  `doctor`.
 - `internal/doctor/`: the read-only checks behind `devingress doctor`, each one a function taking
   its own injectable dependencies (resolver, dialer, cert pool, file reads).
 
