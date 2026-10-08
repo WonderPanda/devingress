@@ -4,18 +4,20 @@ package routefile
 // TestHelpCoversEveryKey fails when a key of `file` is missing from it.
 const Help = `devingress.toml: the routes one checkout registers
 
-"devingress up [dir]" reads <dir>/devingress.toml (another name with --file), resolves it and
-stores the result in the state dir. Variables are expanded and "when" is evaluated at that moment,
-so after changing the file or the env files it names, run "devingress up" again.
+"devingress up [dir]" reads <dir>/devingress.toml (--file names another: absolute, or relative to
+dir), resolves it and stores the result in the state dir. Variables are expanded and "when" is
+evaluated at that moment, so after changing the file or the env files it names, run
+"devingress up" again.
 
 Top-level keys:
 
   domain      string, default "" (hosts are used as written)
               Appended to every [[route]] host as ".<domain>".
   env         array of strings, default []
-              Env files to read ${VARS} from, relative to the checkout. Each line is KEY=VALUE;
-              blank lines, "#" comments and an "export " prefix are allowed, and one pair of
-              matching quotes around the value is removed. A later file overrides an earlier one.
+              Env files to read ${VARS} from: absolute, or relative to the checkout (even when the
+              route file lives elsewhere). Each line is KEY=VALUE; blank lines, "#" comments and
+              an "export " prefix are allowed, and one pair of matching quotes around the value is
+              removed. A later file overrides an earlier one.
 
 [[route]]: one HTTPS site; repeat the table for more.
 
