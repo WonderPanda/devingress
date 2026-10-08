@@ -76,12 +76,21 @@ Both bind ports 80 and 443, so run one per machine, or move devingress with
 
 ## Install
 
+Download the latest release (`linux/amd64` or `linux/arm64`) and check it against its checksum:
+
 ```sh
-go install github.com/WonderPanda/devingress/cmd/devingress@latest
+arch=amd64   # or arm64
+curl -fsSLO "https://github.com/WonderPanda/devingress/releases/latest/download/devingress_linux_$arch.tar.gz"
+curl -fsSLO "https://github.com/WonderPanda/devingress/releases/latest/download/checksums.txt"
+grep "devingress_linux_$arch.tar.gz" checksums.txt | sha256sum -c -
+tar -xzf "devingress_linux_$arch.tar.gz" -C ~/.local/bin devingress
 
 # Run serve at boot, as you, with the capability to bind :80/:443
 devingress service install
 ```
+
+Building from source with a Go toolchain stays an option:
+`go install github.com/WonderPanda/devingress/cmd/devingress@latest`.
 
 `service install` writes `/etc/systemd/system/devingress.service`, a system
 unit that runs `devingress serve` as your user after Docker, turns on lingering

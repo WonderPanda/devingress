@@ -7,8 +7,8 @@ the route file format.
 ## Layout
 
 - `cmd/devingress/`: the CLI (`serve`, `up`, `down`, `status`, `routes`, `doctor`, `caddyfile`,
-  `trust`, `service`, `dns`), each command's help text next to it. `devingress help routefile`
-  lives in `internal/routefile/help.go`.
+  `trust`, `service`, `dns`, `version`), each command's help text next to it. `devingress help
+  routefile` lives in `internal/routefile/help.go`.
 - `internal/routefile/`: parses `devingress.toml` and expands `${VARS}`.
 - `internal/render/`: merges every owner's routes into one Caddy config.
 - `internal/state/`: one JSON file per registered checkout, under `$XDG_STATE_HOME/devingress`.
@@ -58,5 +58,12 @@ Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e
 
 Commits and PR titles use conventional prefixes (`feat:`, `fix:`, `docs:`, `chore:`). Open the PR
 with `gh pr create`; its body says what changed and why. CI (`.github/workflows/ci.yml`) runs
-`go build`, `go vet`, `gofmt -l` and `go test` on every PR and on pushes to `main`, plus a
-separate job that runs the e2e tests.
+`go build`, `go vet`, `gofmt -l` and `go test` on every PR and on pushes to `main`, plus separate
+jobs that run the e2e tests and a `goreleaser release --snapshot --clean` build.
+
+## Releases
+
+`.goreleaser.yaml` builds `linux/amd64` and `linux/arm64` archives and stamps `main.version` with
+the pushed tag. `.github/workflows/release.yml` runs `goreleaser release --clean` and publishes a
+GitHub Release when a `v*` tag is pushed. Agents never push a tag or create a release; the owner
+cuts them.

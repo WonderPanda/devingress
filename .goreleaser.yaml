@@ -1,0 +1,31 @@
+version: 2
+
+builds:
+  - id: devingress
+    main: ./cmd/devingress
+    binary: devingress
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: devingress
+    # Unversioned, so "releases/latest/download/<name>" is a stable URL across releases.
+    name_template: "devingress_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
