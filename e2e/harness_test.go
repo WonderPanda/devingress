@@ -113,6 +113,7 @@ protocols = ["h1"]
 type instance struct {
 	root      string
 	env       []string
+	httpPort  int
 	httpsPort int
 	dnsAddr   string // dns_listen
 	cmd       *exec.Cmd
@@ -125,8 +126,8 @@ type instance struct {
 // port for dns_listen.
 func startInstance(root, caRoot, dnsAddr string) (*instance, error) {
 	in := &instance{root: root, log: &syncBuffer{}, exited: make(chan struct{})}
-	httpPort, err := freePort()
-	if err != nil {
+	var err error
+	if in.httpPort, err = freePort(); err != nil {
 		return nil, err
 	}
 	if in.httpsPort, err = freePort(); err != nil {
@@ -162,7 +163,7 @@ func startInstance(root, caRoot, dnsAddr string) (*instance, error) {
 	}
 
 	conf := fmt.Sprintf("bind = [\"127.0.0.1\"]\nhttp_port = %d\nhttps_port = %d\ndns_listen = %q\n",
-		httpPort, in.httpsPort, in.dnsAddr)
+		in.httpPort, in.httpsPort, in.dnsAddr)
 	if caRoot != "" {
 		conf += fmt.Sprintf("ca_root = %q\n", caRoot)
 	}

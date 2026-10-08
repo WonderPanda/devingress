@@ -333,3 +333,54 @@ func TestDNSListenInUse(t *testing.T) {
 	}
 	t.Log(err)
 }
+
+// TestUnreachableUpstream registers a site and two path routes (strip and not) whose upstream port
+// is closed: each answers 502 with a plain-text body naming the upstream, what it serves and the
+// checkout that owns it.
+func TestUnreachableUpstream(t *testing.T) {
+	roots := pool(t, filepath.Join(caDir, "rootCA.pem"))
+	port, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := checkout(t, srv, "dead-branch", fmt.Sprintf(
+		"domain = %q\n\n[[route]]\nhost = \"web-${slug}\"\nto = \"%d\"\n\n"+
+			"[[path]]\nprefix = \"/dead-strip\"\nto = \"%d\"\nstrip = true\n\n"+
+			"[[path]]\nprefix = \"/dead-keep\"\nto = \"%d\"\n",
+		domain, port, port, port))
+	up(t, srv, dir)
+	host := "web-dead-branch." + domain
+	upstream := fmt.Sprintf("127.0.0.1:%d", port)
+
+	for _, c := range []struct {
+		client *http.Client
+		url    string
+		names  string
+	}{
+		{srv.client(roots), "https://" + host + "/", host},
+		{http.DefaultClient, fmt.Sprintf("http://127.0.0.1:%d/dead-strip/a", srv.httpPort), "/dead-strip/*"},
+		{http.DefaultClient, fmt.Sprintf("http://127.0.0.1:%d/dead-keep/a", srv.httpPort), "/dead-keep/*"},
+	} {
+		want := fmt.Sprintf("nothing answered at %s for %s (owner %s)", upstream, c.names, dir)
+		err := poll(10*time.Second, func() error {
+			resp, err := c.client.Get(c.url)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			ct := resp.Header.Get("Content-Type")
+			if resp.StatusCode != http.StatusBadGateway || ct != "text/plain; charset=utf-8" || !strings.Contains(string(body), want) {
+				return fmt.Errorf("got %s, Content-Type %q, body %q; want 502, text/plain, a body containing %q",
+					resp.Status, ct, body, want)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("GET %s: %v", c.url, err)
+		}
+	}
+}
