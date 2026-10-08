@@ -145,6 +145,16 @@ func TestDoctor(t *testing.T) {
 			t.Errorf("host %s: statuses %v, want exactly one ok (TLS) and one fail (DNS)", host, got)
 		}
 	}
+
+	// The harness's hello-world upstream is listening, so both routes to it probe ok.
+	for _, host := range []string{webHost, h1Host} {
+		subject := fmt.Sprintf("127.0.0.1:%s (%s)", upstreamPort(), host)
+		if !slices.ContainsFunc(checks, func(c check) bool {
+			return c.Check == "upstream" && c.Subject == subject && c.Status == "ok"
+		}) {
+			t.Errorf("no passing upstream check %q in:\n%s", subject, out)
+		}
+	}
 }
 
 // TestRoutesURLsConnect checks that `routes --json` prints URLs that are
