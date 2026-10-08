@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/WonderPanda/devingress/internal/config"
 	"github.com/WonderPanda/devingress/internal/state"
 )
 
-const routesHelp = `List registered routes, one per line: URL, upstream, owner directory, and "[gone]" when the
-owner's directory no longer exists (it is pruned on the next up or down). Sites come first, sorted
-by host, then path routes, sorted by prefix.
+const routesHelp = `List registered routes, grouped by owner directory: one block per owner, sorted by directory,
+with a blank line between blocks. Each block starts with the directory (your home shortened to
+~), followed by "[gone]" when it no longer exists (it is pruned on the next up or down). Under it,
+indented, one route per line, URL then upstream: sites sorted by host, then path routes sorted by
+prefix. --json prints a flat array instead, in the order documented below.
 
 Flags:
   --dir D     only routes owned by D, resolved as up resolves dir (absolute, symlinks resolved)
@@ -32,8 +36,9 @@ JSON fields, always present:
   path  {"kind": "path", "prefix", "upstream", "strip", "dir", "file", "slug", "gone"}
   url is ready to use: "https://<host>", plus ":<https_port>" when config.toml sets one other
   than 443. retry is "" when unset, protocols a list ([] for the default h1 and h2), strip and
-  gone booleans. dir is the owner's directory, file its route file and slug its ${slug}. No
-  match prints [].
+  gone booleans. dir is the owner's absolute directory, file its route file and slug its
+  ${slug}. Sites come first, sorted by host then dir, then path routes, sorted by prefix then
+  dir. No match prints [].
 
 Exit codes:
   0  printed; with no filter, an empty registry prints nothing (or [])
@@ -70,6 +75,14 @@ type pathRoute struct {
 	Gone     bool   `json:"gone"`
 }
 
+// ownerRoutes is one owner's routes that pass the filters.
+type ownerRoutes struct {
+	dir   string
+	gone  bool
+	sites []siteRoute
+	paths []pathRoute
+}
+
 func routes(args []string, stdout io.Writer) error {
 	fs := flags("routes")
 	dirFlag := fs.String("dir", "", "only routes owned by this directory")
@@ -98,32 +111,39 @@ func routes(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	sites, paths := []siteRoute{}, []pathRoute{}
+	// One group per owner with matching routes, in the dir order List returns.
+	var groups []ownerRoutes
 	for _, o := range owners {
 		if dir != "" && o.Dir != dir {
 			continue
 		}
 		_, statErr := os.Stat(o.Dir)
-		gone := statErr != nil
+		g := ownerRoutes{dir: o.Dir, gone: statErr != nil}
 		for _, s := range o.Sites {
 			if *host != "" && s.Host != *host {
 				continue
 			}
-			sites = append(sites, siteRoute{Kind: "site", URL: siteURL(s.Host, cfg.HTTPSPort), Host: s.Host, Upstream: s.Upstream,
-				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: gone})
+			g.sites = append(g.sites, siteRoute{Kind: "site", URL: siteURL(s.Host, cfg.HTTPSPort), Host: s.Host, Upstream: s.Upstream,
+				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: g.gone})
 		}
-		if *host != "" {
-			continue // --host selects a site; path routes have no host
+		if *host == "" { // --host selects a site; path routes have no host
+			for _, p := range o.Paths {
+				g.paths = append(g.paths, pathRoute{Kind: "path", Prefix: p.Prefix, Upstream: p.Upstream, Strip: p.Strip,
+					Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: g.gone})
+			}
 		}
-		for _, p := range o.Paths {
-			paths = append(paths, pathRoute{Kind: "path", Prefix: p.Prefix, Upstream: p.Upstream, Strip: p.Strip,
-				Dir: o.Dir, File: o.File, Slug: o.Slug, Gone: gone})
+		if len(g.sites)+len(g.paths) > 0 {
+			groups = append(groups, g)
 		}
 	}
-	slices.SortFunc(sites, func(a, b siteRoute) int { return cmp.Or(cmp.Compare(a.Host, b.Host), cmp.Compare(a.Dir, b.Dir)) })
-	slices.SortFunc(paths, func(a, b pathRoute) int { return cmp.Or(cmp.Compare(a.Prefix, b.Prefix), cmp.Compare(a.Dir, b.Dir)) })
 
 	if *asJSON {
+		sites, paths := []siteRoute{}, []pathRoute{}
+		for _, g := range groups {
+			sites, paths = append(sites, g.sites...), append(paths, g.paths...)
+		}
+		slices.SortFunc(sites, func(a, b siteRoute) int { return cmp.Or(cmp.Compare(a.Host, b.Host), cmp.Compare(a.Dir, b.Dir)) })
+		slices.SortFunc(paths, func(a, b pathRoute) int { return cmp.Or(cmp.Compare(a.Prefix, b.Prefix), cmp.Compare(a.Dir, b.Dir)) })
 		all := make([]any, 0, len(sites)+len(paths))
 		for _, s := range sites {
 			all = append(all, s)
@@ -137,19 +157,30 @@ func routes(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "%s\n", out)
 	} else {
+		// A header line has no tab, so it ends tabwriter's column block: each
+		// owner's routes align among themselves.
 		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-		for _, s := range sites {
-			fmt.Fprintf(tw, "%s\t%s\t%s%s\n", s.URL, s.Upstream, s.Dir, goneMark(s.Gone))
-		}
-		for _, p := range paths {
-			fmt.Fprintf(tw, "http://<host>%s/*\t%s\t%s%s\n", p.Prefix, p.Upstream, p.Dir, goneMark(p.Gone))
+		home, _ := os.UserHomeDir()
+		for i, g := range groups {
+			if i > 0 {
+				fmt.Fprintln(tw)
+			}
+			fmt.Fprintf(tw, "%s%s\n", tildeHome(g.dir, home), goneMark(g.gone))
+			slices.SortFunc(g.sites, func(a, b siteRoute) int { return cmp.Compare(a.Host, b.Host) })
+			slices.SortFunc(g.paths, func(a, b pathRoute) int { return cmp.Compare(a.Prefix, b.Prefix) })
+			for _, s := range g.sites {
+				fmt.Fprintf(tw, "  %s\t%s\n", s.URL, s.Upstream)
+			}
+			for _, p := range g.paths {
+				fmt.Fprintf(tw, "  http://<host>%s/*\t%s\n", p.Prefix, p.Upstream)
+			}
 		}
 		if err := tw.Flush(); err != nil {
 			return err
 		}
 	}
 
-	if len(sites)+len(paths) > 0 {
+	if len(groups) > 0 {
 		return nil
 	}
 	switch {
@@ -168,6 +199,22 @@ func siteURL(host string, httpsPort int) string {
 		return "https://" + host
 	}
 	return fmt.Sprintf("https://%s:%d", host, httpsPort)
+}
+
+// tildeHome shortens home, or a directory under it, to ~ for display. An empty
+// home (it could not be determined) leaves dir as is.
+func tildeHome(dir, home string) string {
+	if home == "" {
+		return dir
+	}
+	home = filepath.Clean(home)
+	if dir == home {
+		return "~"
+	}
+	if rest, ok := strings.CutPrefix(dir, home+"/"); ok {
+		return "~/" + rest
+	}
+	return dir
 }
 
 func goneMark(gone bool) string {

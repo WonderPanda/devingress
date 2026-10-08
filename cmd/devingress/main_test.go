@@ -168,25 +168,80 @@ func checkouts(t *testing.T) (root, a, b, gone string) {
 	return root, a, b, gone
 }
 
+// pinHome points HOME outside every registered owner, so text output prints
+// absolute dirs wherever t.TempDir sits.
+func pinHome(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+}
+
+func routesText(t *testing.T, args ...string) []string {
+	t.Helper()
+	code, stdout, stderr := runCLI(t, append([]string{"routes"}, args...)...)
+	if code != 0 || stderr != "" {
+		t.Fatalf("%v: exit %d, stderr %q", args, code, stderr)
+	}
+	if !strings.HasSuffix(stdout, "\n") {
+		t.Fatalf("%v: stdout %q does not end in a newline", args, stdout)
+	}
+	return strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
+}
+
 func TestRoutesAllOwners(t *testing.T) {
 	_, a, b, gone := checkouts(t)
-	code, stdout, stderr := runCLI(t, "routes")
-	if code != 0 || stderr != "" {
-		t.Fatalf("exit %d, stderr %q", code, stderr)
+	pinHome(t)
+	want := []string{
+		a,
+		"  https://api-main.example.dev  127.0.0.1:3001",
+		"  https://web-main.example.dev  127.0.0.1:3000",
+		"  http://<host>/auth-main/*     127.0.0.1:3002",
+		"",
+		b,
+		"  https://web-feat.example.dev  127.0.0.1:4000",
+		"",
+		gone + "  [gone]",
+		"  https://web-old.example.dev  127.0.0.1:5000",
 	}
-	var got [][]string
-	for _, line := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
-		got = append(got, strings.Fields(line))
+	if got := routesText(t); !slices.Equal(got, want) {
+		t.Errorf("routes:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	want := [][]string{
-		{"https://api-main.example.dev", "127.0.0.1:3001", a},
-		{"https://web-feat.example.dev", "127.0.0.1:4000", b},
-		{"https://web-main.example.dev", "127.0.0.1:3000", a},
-		{"https://web-old.example.dev", "127.0.0.1:5000", gone, "[gone]"},
-		{"http://<host>/auth-main/*", "127.0.0.1:3002", a},
+}
+
+func TestRoutesHomeShortened(t *testing.T) {
+	root, a, b, _ := checkouts(t)
+	sub, sibling := filepath.Join(a, "sub"), a+"2"
+	registry(t,
+		routefile.Owner{Dir: sub, Slug: "sub", Sites: []routefile.Site{{Host: "web-sub.example.dev", Upstream: "127.0.0.1:6000"}}},
+		routefile.Owner{Dir: sibling, Slug: "a2", Sites: []routefile.Site{{Host: "web-a2.example.dev", Upstream: "127.0.0.1:7000"}}},
+	)
+	t.Setenv("HOME", a)
+	var headers []string
+	for _, line := range routesText(t) {
+		if line != "" && !strings.HasPrefix(line, " ") {
+			headers = append(headers, line)
+		}
 	}
-	if !slices.EqualFunc(got, want, slices.Equal) {
-		t.Errorf("routes:\n%s\nwant %v", stdout, want)
+	want := []string{"~", "~/sub  [gone]", sibling + "  [gone]", b, filepath.Join(root, "gone") + "  [gone]"}
+	if !slices.Equal(headers, want) {
+		t.Errorf("headers with HOME=%s:\n%s\nwant:\n%s", a, strings.Join(headers, "\n"), strings.Join(want, "\n"))
+	}
+	if routes := routesJSON(t, 0, "--dir", a); routes[0].Dir != a {
+		t.Errorf("--json dir = %s, want the absolute %s", routes[0].Dir, a)
+	}
+}
+
+func TestTildeHome(t *testing.T) {
+	for _, c := range []struct{ dir, home, want string }{
+		{"/home/u", "/home/u", "~"},
+		{"/home/u/x/y", "/home/u", "~/x/y"},
+		{"/home/u/x", "/home/u/", "~/x"},
+		{"/home/u2/x", "/home/u", "/home/u2/x"},
+		{"/srv/x", "/home/u", "/srv/x"},
+		{"/home/u/x", "", "/home/u/x"},
+	} {
+		if got := tildeHome(c.dir, c.home); got != c.want {
+			t.Errorf("tildeHome(%q, %q) = %q, want %q", c.dir, c.home, got, c.want)
+		}
 	}
 }
 
@@ -287,9 +342,9 @@ func TestRoutesHost(t *testing.T) {
 	if len(routes) != 1 || *routes[0].Host != "web-feat.example.dev" || routes[0].Dir != b {
 		t.Errorf("--host: %+v", routes)
 	}
-	code, stdout, _ := runCLI(t, "routes", "--host", "web-feat.example.dev")
-	if code != 0 || len(strings.Split(strings.TrimSpace(stdout), "\n")) != 1 {
-		t.Errorf("--host text: exit %d\n%s", code, stdout)
+	pinHome(t)
+	if got, want := routesText(t, "--host", "web-feat.example.dev"), []string{b, "  https://web-feat.example.dev  127.0.0.1:4000"}; !slices.Equal(got, want) {
+		t.Errorf("--host text: %q, want %q", got, want)
 	}
 	if routes := routesJSON(t, 0, "--host", "web-feat.example.dev", "--dir", b); len(routes) != 1 {
 		t.Errorf("--host with its owner's --dir: %+v", routes)
@@ -327,9 +382,8 @@ func TestRoutesHTTPSPort(t *testing.T) {
 	if len(routes) != 1 || *routes[0].URL != "https://web-feat.example.dev:8443" {
 		t.Errorf("--json with https_port 8443: %+v", routes)
 	}
-	code, stdout, _ := runCLI(t, "routes", "--host", "web-feat.example.dev")
-	if code != 0 || strings.Fields(stdout)[0] != "https://web-feat.example.dev:8443" {
-		t.Errorf("text with https_port 8443: exit %d\n%s", code, stdout)
+	if lines := routesText(t, "--host", "web-feat.example.dev"); len(lines) != 2 || strings.Fields(lines[1])[0] != "https://web-feat.example.dev:8443" {
+		t.Errorf("text with https_port 8443: %q", lines)
 	}
 }
 
