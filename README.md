@@ -195,6 +195,9 @@ through untouched.
 - Calls are serialized with a file lock, so parallel worktree hooks are safe.
 - Each host gets its own certificate, so pinning one host to HTTP/1.1 can't
   affect connections to the others.
+- An unreachable upstream answers 502 (504 on a timeout) with a plain-text body
+  naming the upstream and the checkout that owns the route. A raw `caddy` body
+  keeps whatever error handling it writes.
 
 Optional host settings live in `~/.config/devingress/config.toml`:
 
