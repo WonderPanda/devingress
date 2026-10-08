@@ -1,6 +1,7 @@
 // Package doctor diagnoses why a devingress URL does not load. Every check is
-// read-only: it never writes state or config, never loads config into a
-// running serve, and never runs an external command.
+// read-only: it may dial serve and the registered upstreams, but it never
+// writes state or config, never loads config into a running serve, and never
+// runs an external command.
 package doctor
 
 import (
@@ -19,6 +20,7 @@ import (
 	"github.com/miekg/dns"
 
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/probe"
 	"github.com/WonderPanda/devingress/internal/resolved"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/service"
@@ -150,6 +152,7 @@ func Run(deps Deps) []Check {
 		checks = append(checks, checkOwners(owners)...)
 		checks = append(checks, checkHosts(deps, owners, cfg.HTTPSPort, rootPath)...)
 		checks = append(checks, checkDNSRoutes(deps, owners)...)
+		checks = append(checks, checkUpstreams(deps, owners)...)
 	}
 
 	checks = append(checks, checkService(deps)...)
@@ -382,6 +385,47 @@ func checkDNSRoute(deps Deps, host string, routed map[string]string) Check {
 	return Check{Check: "dns", Subject: host, Status: Warn,
 		Message: "no devingress drop-in in " + resolved.Dir + " routes it, and it does not resolve to loopback",
 		Fix:     dnsFix(host)}
+}
+
+// checkUpstreams dials every live owner's upstreams in parallel and warns about each one nothing
+// listens on: the usual reason a registered URL 502s.
+func checkUpstreams(deps Deps, owners []routefile.Owner) []Check {
+	var live []routefile.Owner
+	var upstreams []string
+	for _, o := range owners {
+		if _, err := os.Stat(o.Dir); err != nil {
+			continue // covered by the owners check
+		}
+		live = append(live, o)
+		for _, s := range o.Sites {
+			upstreams = append(upstreams, s.Upstream)
+		}
+		for _, p := range o.Paths {
+			upstreams = append(upstreams, p.Upstream)
+		}
+	}
+	results := probe.All(deps.Dial, upstreams)
+
+	var out []Check
+	add := func(o routefile.Owner, upstream, route string) {
+		subject := fmt.Sprintf("%s (%s)", upstream, route)
+		switch results[upstream] {
+		case probe.Up:
+			out = append(out, Check{Check: "upstream", Subject: subject, Status: OK, Message: "accepts TCP"})
+		case probe.Down:
+			out = append(out, Check{Check: "upstream", Subject: subject, Status: Warn,
+				Message: "nothing listening", Fix: "start the dev server for " + o.Dir})
+		}
+	}
+	for _, o := range live {
+		for _, s := range o.Sites {
+			add(o, s.Upstream, s.Host)
+		}
+		for _, p := range o.Paths {
+			add(o, p.Upstream, p.Prefix)
+		}
+	}
+	return out
 }
 
 func checkHostTLS(deps Deps, host string, httpsPort int, rootPool *x509.CertPool, rootErr error) Check {

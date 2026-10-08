@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -396,5 +397,56 @@ func TestRoutesEmptyRegistry(t *testing.T) {
 	code, stdout, stderr = runCLI(t, "routes")
 	if code != 0 || stdout != "" || stderr != "" {
 		t.Errorf("text: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+}
+
+func TestStatusProbesUpstreams(t *testing.T) {
+	root, err := filepath.EvalSymlinks(isolate(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NO_COLOR", "")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := closed.Addr().String()
+	closed.Close()
+
+	registry(t, routefile.Owner{Dir: root, File: "devingress.toml", Slug: "main",
+		Sites: []routefile.Site{
+			{Host: "live.example.dev", Upstream: ln.Addr().String()},
+			{Host: "dead.example.dev", Upstream: dead},
+			{Host: "dyn.example.dev", Upstream: "{http.request.header.X-To}"},
+		},
+		Paths: []routefile.PathRoute{{Prefix: "/auth", Upstream: dead}}})
+
+	code, stdout, stderr := runCLI(t, "status")
+	if code != 0 || stderr != "" {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{
+		"  up    https://live.example.dev -> " + ln.Addr().String() + "\n",
+		"  down  https://dead.example.dev -> " + dead + "\n",
+		"  ?     https://dyn.example.dev -> {http.request.header.X-To}\n",
+		"  down  http://<host>/auth/* -> " + dead + "\n",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("missing %q in:\n%s", want, stdout)
+		}
 	}
 }

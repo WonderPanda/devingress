@@ -12,9 +12,10 @@ import (
 
 const doctorHelp = `Diagnose why a devingress URL does not load: serve, the bound ports, the bind addresses, the
 DNS listener (when dns_listen is set), the root CA's trust, every registered owner, every
-registered host's DNS and TLS and whether a "devingress dns setup" drop-in routes it, and (when
-installed) the systemd unit. Prints one line per check: ok, warn or fail, the subject, and for
-anything not ok a fix. Warnings don't affect the exit code.
+registered host's DNS and TLS and whether a "devingress dns setup" drop-in routes it, every
+registered upstream (warn when nothing listens), and (when installed) the systemd unit. Prints
+one line per check: ok, warn or fail, the subject, and for anything not ok a fix. Warnings don't
+affect the exit code.
 
 Flags:
   --json    print a JSON array of {"check","subject","status","message","fix"} instead

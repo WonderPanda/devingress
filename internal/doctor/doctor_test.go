@@ -13,8 +13,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -453,5 +455,49 @@ func TestCheckDNSRoutes(t *testing.T) {
 	none.Glob = func(string) ([]string, error) { return nil, nil }
 	if got := checkDNSRoutes(none, owners); got[0].Status != Warn {
 		t.Errorf("no drop-ins: %+v", got[0])
+	}
+}
+
+func TestCheckUpstreams(t *testing.T) {
+	present := t.TempDir()
+	gone := filepath.Join(t.TempDir(), "removed")
+	owners := []routefile.Owner{
+		{Dir: present,
+			Sites: []routefile.Site{
+				{Host: "web.example.dev", Upstream: "127.0.0.1:3000"},
+				{Host: "api.example.dev", Upstream: "127.0.0.1:3001"},
+				{Host: "dyn.example.dev", Upstream: "{http.request.header.X-To}"},
+			},
+			Paths: []routefile.PathRoute{{Prefix: "/auth", Upstream: "127.0.0.1:3001"}}},
+		{Dir: gone, Sites: []routefile.Site{{Host: "old.example.dev", Upstream: "127.0.0.1:5000"}}},
+	}
+	var dialed []string
+	var mu sync.Mutex
+	deps := Deps{Dial: func(network, address string, _ time.Duration) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, address)
+		mu.Unlock()
+		if address == "127.0.0.1:3000" {
+			c, s := net.Pipe()
+			s.Close()
+			return c, nil
+		}
+		return nil, errors.New("connection refused")
+	}}
+
+	got := checkUpstreams(deps, owners)
+	want := []Check{
+		{Check: "upstream", Subject: "127.0.0.1:3000 (web.example.dev)", Status: OK, Message: "accepts TCP"},
+		{Check: "upstream", Subject: "127.0.0.1:3001 (api.example.dev)", Status: Warn,
+			Message: "nothing listening", Fix: "start the dev server for " + present},
+		{Check: "upstream", Subject: "127.0.0.1:3001 (/auth)", Status: Warn,
+			Message: "nothing listening", Fix: "start the dev server for " + present},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got:\n%+v\nwant:\n%+v", got, want)
+	}
+	slices.Sort(dialed)
+	if !slices.Equal(dialed, []string{"127.0.0.1:3000", "127.0.0.1:3001"}) {
+		t.Errorf("dialed %v; want each live upstream once, never the gone owner's or the placeholder", dialed)
 	}
 }
