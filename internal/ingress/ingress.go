@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -172,8 +173,8 @@ func Serve() error {
 	if err != nil {
 		return err
 	}
-	if sock := config.AdminSocket(); len(sock) > 107 {
-		return fmt.Errorf("admin socket path %s is %d bytes; Unix sockets allow 107 (set a shorter XDG_RUNTIME_DIR)", sock, len(sock))
+	if err := checkSocketPath(config.AdminSocket(), runtime.GOOS); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(config.RuntimeDir(), 0o700); err != nil {
 		return err
@@ -201,4 +202,17 @@ func Serve() error {
 	defer stop()
 	<-ctx.Done()
 	return caddy.Stop()
+}
+
+// checkSocketPath refuses an admin socket path longer than goos's sun_path holds, less its NUL:
+// 107 bytes on Linux, 103 on macOS.
+func checkSocketPath(sock, goos string) error {
+	limit := 107
+	if goos == "darwin" {
+		limit = 103
+	}
+	if len(sock) > limit {
+		return fmt.Errorf("admin socket path %s is %d bytes; Unix sockets allow %d (set a shorter XDG_RUNTIME_DIR)", sock, len(sock), limit)
+	}
+	return nil
 }
