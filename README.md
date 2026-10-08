@@ -152,7 +152,7 @@ Then, from the checkout or your worktree setup/teardown hooks:
 devingress up          # register this checkout's routes
 devingress down        # remove them
 devingress status      # every registered checkout and its URLs
-devingress routes      # every registered route; --dir . for this checkout's, --json for scripts
+devingress routes      # every registered route, grouped by checkout; --dir . for this checkout's, --json for scripts
 devingress doctor      # a URL doesn't load? diagnose serve, ports, DNS, certificates and more
 devingress dns setup example.dev   # once: resolve *.example.dev to loopback
 ```
