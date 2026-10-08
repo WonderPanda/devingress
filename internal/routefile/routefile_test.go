@@ -19,6 +19,15 @@ func write(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// unsetenv unsets names for the test and restores them afterwards.
+func unsetenv(t *testing.T, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		t.Setenv(n, "")
+		os.Unsetenv(n)
+	}
+}
+
 func TestLoadResolvesTemplates(t *testing.T) {
 	dir := write(t, map[string]string{
 		".env.worktree": "VITE_PORT=10299\nexport MEDPLUM_PORT='10301'\n# ENABLE_MEDPLUM=false\nENABLE_MEDPLUM=true\n",
@@ -179,4 +188,102 @@ to = "${PORT}"
 		}
 		port(t, o, "1003")
 	})
+}
+
+func TestLoadDefaults(t *testing.T) {
+	cases := map[string]struct{ env, to, want string }{
+		":- unset":         {"", "${X:-5225}", "127.0.0.1:5225"},
+		":- empty":         {"X=\n", "${X:-5225}", "127.0.0.1:5225"},
+		":- set":           {"X=6000\n", "${X:-5225}", "127.0.0.1:6000"},
+		"- unset":          {"", "${X-5225}", "127.0.0.1:5225"},
+		"- empty":          {"X=\n", "a${X-5225}", "a"},
+		"- set":            {"X=6000\n", "${X-5225}", "127.0.0.1:6000"},
+		"default with : /": {"", "${UP:-host.docker.internal:5225}", "host.docker.internal:5225"},
+		"empty default":    {"", "1${X:-}", "127.0.0.1:1"},
+		"jackson unset":    {"", "${JACKSON_PORT:-5225}", "127.0.0.1:5225"},
+		"jackson env file": {"JACKSON_PORT=6000\n", "${JACKSON_PORT:-5225}", "127.0.0.1:6000"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			unsetenv(t, "X", "UP", "JACKSON_PORT")
+			dir := write(t, map[string]string{
+				".env":            c.env,
+				"devingress.toml": "env = [\".env\"]\n[[route]]\nhost = \"web\"\nto = \"" + c.to + "\"\n",
+			})
+			o, err := Load(dir, DefaultName, "s")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(o.Sites) != 1 || o.Sites[0].Upstream != c.want {
+				t.Fatalf("sites = %+v, want upstream %q", o.Sites, c.want)
+			}
+		})
+	}
+}
+
+func TestLoadDefaultsProcessEnv(t *testing.T) {
+	t.Setenv("DEVINGRESS_TEST_EMPTY", "")
+	t.Setenv("DEVINGRESS_TEST_SET", "7000")
+	dir := write(t, map[string]string{"devingress.toml": `
+[[route]]
+host = "a${DEVINGRESS_TEST_EMPTY:-b}"
+to = "${DEVINGRESS_TEST_SET:-1}"
+
+[[route]]
+host = "c${DEVINGRESS_TEST_EMPTY-d}"
+to = "1"
+`})
+	o, err := Load(dir, DefaultName, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o.Sites) != 2 || o.Sites[0].Host != "ab" || o.Sites[0].Upstream != "127.0.0.1:7000" || o.Sites[1].Host != "c" {
+		t.Fatalf("sites = %+v", o.Sites)
+	}
+}
+
+func TestLoadDefaultsPrefixWhenCaddy(t *testing.T) {
+	unsetenv(t, "DEVINGRESS_TEST_UNSET")
+	dir := write(t, map[string]string{"devingress.toml": `
+[[route]]
+host = "on"
+to = "1"
+when = "${DEVINGRESS_TEST_UNSET:-1}"
+caddy = '''
+header X-Host "{http.request.host}" "{$HOME}" "{$HOME:fallback}"
+header X-Default "${DEVINGRESS_TEST_UNSET:-d}"
+reverse_proxy ${upstream}
+'''
+
+[[route]]
+host = "off"
+to = "1"
+when = "${DEVINGRESS_TEST_UNSET:-0}"
+
+[[route]]
+host = "plain-off"
+to = "1"
+when = "${DEVINGRESS_TEST_UNSET}"
+
+[[path]]
+prefix = "${DEVINGRESS_TEST_UNSET:-/auth/x}"
+to = "1"
+`})
+	o, err := Load(dir, DefaultName, "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o.Sites) != 1 || o.Sites[0].Host != "on" {
+		t.Fatalf("want only the route enabled by its default, got %+v", o.Sites)
+	}
+	want := `header X-Host "{http.request.host}" "{$HOME}" "{$HOME:fallback}"
+header X-Default "d"
+reverse_proxy 127.0.0.1:1
+`
+	if o.Sites[0].Caddy != want {
+		t.Errorf("caddy =\n%s\nwant\n%s", o.Sites[0].Caddy, want)
+	}
+	if len(o.Paths) != 1 || o.Paths[0].Prefix != "/auth/x" {
+		t.Errorf("paths = %+v", o.Paths)
+	}
 }

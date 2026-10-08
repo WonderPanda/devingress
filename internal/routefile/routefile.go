@@ -161,9 +161,10 @@ func orEmpty(err error, fallback string) string {
 	return fallback
 }
 
-// ${NAME}: distinct from Caddy's own {$ENV} and {placeholder} syntax, so raw
-// Caddy text passes through untouched apart from devingress's variables.
-var varRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+// ${NAME}, ${NAME:-default} and ${NAME-default}: distinct from Caddy's own {$ENV}
+// and {placeholder} syntax, so raw Caddy text passes through untouched apart from
+// devingress's variables. Groups: name, operator ("", "-", ":-"), literal default.
+var varRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}`)
 
 type resolver struct {
 	slug string
@@ -184,11 +185,22 @@ func (r resolver) lookup(name string, local map[string]string) (string, bool) {
 	return os.LookupEnv(name)
 }
 
+// resolve expands one varRe match. ":-" uses the default when NAME is unset or
+// empty, "-" only when it is unset; a reference with a default is always defined.
+func (r resolver) resolve(m string, local map[string]string) (name, value string, defined bool) {
+	g := varRe.FindStringSubmatch(m)
+	name, op, def := g[1], g[2], g[3]
+	v, ok := r.lookup(name, local)
+	if (op == ":-" && v == "") || (op == "-" && !ok) {
+		return name, def, true
+	}
+	return name, v, ok
+}
+
 func (r resolver) expand(s string, local map[string]string) (string, error) {
 	var missing []string
 	out := varRe.ReplaceAllStringFunc(s, func(m string) string {
-		name := varRe.FindStringSubmatch(m)[1]
-		v, ok := r.lookup(name, local)
+		name, v, ok := r.resolve(m, local)
 		if !ok {
 			missing = append(missing, name)
 		}
@@ -206,8 +218,8 @@ func (r resolver) enabled(when string) bool {
 		return true
 	}
 	v := varRe.ReplaceAllStringFunc(when, func(m string) string {
-		s, _ := r.lookup(varRe.FindStringSubmatch(m)[1], nil)
-		return s
+		_, v, _ := r.resolve(m, nil)
+		return v
 	})
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
