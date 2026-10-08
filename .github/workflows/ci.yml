@@ -39,6 +39,28 @@ jobs:
       - name: go test
         run: go test ./...
 
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      # The listener tests that bind loopback :80 as non-root are what macOS support rests on.
+      - name: lo0 listener tests
+        run: go test -v -run 'TestLoopbackNetwork' ./internal/ingress/
+
   e2e:
     runs-on: ubuntu-latest
     steps:

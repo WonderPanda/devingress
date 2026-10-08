@@ -14,9 +14,18 @@ the route file format.
 - `internal/state/`: one JSON file per registered owner (checkout plus `up --name`), under
   `$XDG_STATE_HOME/devingress`.
 - `internal/ingress/`: runs Caddy and reloads it through the admin socket.
-- `internal/service/`: the systemd system unit `devingress service install` writes, and its commands.
+- `internal/service/`: the systemd system unit `devingress service install` writes on Linux, and its
+  commands.
+- `internal/launchd/`: the LaunchAgent `devingress service install` writes on macOS, and its
+  launchctl commands.
 - `internal/localdns/`: serve's wildcard DNS listener (A 127.0.0.1, AAAA ::1 for every name).
-- `internal/resolved/`: the systemd-resolved drop-in `devingress dns setup` writes, and its commands.
+- `internal/resolved/`: the systemd-resolved drop-in `devingress dns setup` writes on Linux, and its
+  commands.
+- `internal/macresolver/`: the `/etc/resolver/<domain>` file `devingress dns setup` writes on macOS,
+  and its commands.
+- `internal/ingress/lo0_darwin.go`: the Caddy network that lets a non-root serve bind loopback
+  :80/:443 on macOS (wildcard address, socket bound to lo0). `config.Render` routes loopback bind
+  addresses through it on darwin.
 - `internal/config/`: host settings (`~/.config/devingress/config.toml`: `bind`, `http_port`,
   `https_port`, `ca_root`, `dns_listen`) and the XDG paths.
 - `internal/probe/`: dials route upstreams in parallel (up, down or unknown) for `status` and
@@ -53,20 +62,25 @@ Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e
   ```
 - Never run `sudo` or `setcap`.
 - Never run `devingress service install` or `uninstall` without `--print`: they run `sudo`,
-  `systemctl` and `loginctl`.
+  `systemctl` and `loginctl` (`launchctl` on macOS).
 - Never run `devingress dns setup` or `remove` without `--print`: they run `sudo` and `systemctl`
-  and write `/etc/systemd/resolved.conf.d/`. Never run a `resolvectl` subcommand that changes state.
+  and write `/etc/systemd/resolved.conf.d/` (`/etc/resolver/` and `killall` on macOS). Never run a
+  `resolvectl` subcommand that changes state.
+- Never run `launchctl`, `security` or `killall`. Tests replace every function that would, and
+  write nothing outside `t.TempDir()`. The darwin-only code (`_darwin.go`) is checked by
+  `GOOS=darwin go vet ./...` and the CI `macos` job.
 
 ## Pull requests
 
 Commits and PR titles use conventional prefixes (`feat:`, `fix:`, `docs:`, `chore:`). Open the PR
 with `gh pr create`; its body says what changed and why. CI (`.github/workflows/ci.yml`) runs
 `go build`, `go vet`, `gofmt -l` and `go test` on every PR and on pushes to `main`, plus separate
-jobs that run the e2e tests and a `goreleaser release --snapshot --clean` build.
+jobs that run the e2e tests, `go build`/`go vet`/`go test` on `macos-latest`, and a
+`goreleaser release --snapshot --clean` build.
 
 ## Releases
 
-`.goreleaser.yaml` builds `linux/amd64` and `linux/arm64` archives and stamps `main.version` with
-the pushed tag. `.github/workflows/release.yml` runs `goreleaser release --clean` and publishes a
-GitHub Release when a `v*` tag is pushed. Agents never push a tag or create a release; the owner
+`.goreleaser.yaml` builds `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64` archives
+and stamps `main.version` with the pushed tag. `.github/workflows/release.yml` runs `goreleaser
+release --clean` and publishes a GitHub Release when a `v*` tag is pushed. Agents never push a tag or create a release; the owner
 cuts them.

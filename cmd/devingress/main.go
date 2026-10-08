@@ -25,7 +25,7 @@ var version string
 
 const usage = `devingress: local HTTPS routing for projects and worktrees
 
-  devingress serve                                 run the proxy (normally under systemd)
+  devingress serve                                 run the proxy (normally as a service)
   devingress up [dir] [--file F] [--slug S] [--name N]  register dir's routes, as set N if named
   devingress down [dir] [--name N | --all]         remove dir's unnamed set, set N, or all
   devingress status                                list owners and their hosts
@@ -33,7 +33,7 @@ const usage = `devingress: local HTTPS routing for projects and worktrees
   devingress doctor [--json]                       diagnose why a URL does not load
   devingress caddyfile                             print the rendered Caddyfile
   devingress trust [--uninstall] [--path]          trust devingress's root CA (mkcert optional)
-  devingress service install|uninstall [--print]   run serve at boot as a systemd system unit
+  devingress service install|uninstall [--print]   run serve in the background: systemd or launchd
   devingress dns setup|remove <domain> [--reset-global-dns] [--print]  route a domain to serve's DNS
   devingress version                               print the version and exit
   devingress help <command>                        full help for one command
@@ -224,8 +224,10 @@ func ownerDir(dir string) (string, error) {
 }
 
 const serveHelp = `Run the proxy in the foreground until SIGINT or SIGTERM: Caddy serving every registered route on
-http_port and https_port of each bind address. Normally run by the system unit that "devingress
-service install" sets up. Only one serve runs per admin socket.
+http_port and https_port of each bind address. Normally run by the systemd unit or LaunchAgent
+that "devingress service install" sets up. Only one serve runs per admin socket. On macOS, a
+loopback bind address is served on the wildcard address restricted to lo0, which lets serve bind
+ports below 1024 without root.
 
 Reads the config file and the state dir, pruning owners whose directory is gone, then creates the
 admin socket and keeps certificates under $XDG_DATA_HOME/devingress/caddy. up and down load new
