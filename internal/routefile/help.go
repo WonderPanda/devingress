@@ -28,7 +28,8 @@ Top-level keys:
               passed to Caddy's reverse_proxy as written.
   when        string, default "" (always on)
               Register the route only if this expands to 1, true, yes or on (any case). An
-              undefined variable here means off, not an error.
+              undefined variable here means off, not an error; "${X:-1}" means on unless X says
+              otherwise.
   retry       string, a Caddy duration such as "5s", default "" (no retry)
               Retry a refused upstream connection for this long instead of answering 502, to ride
               out dev-server restarts.
@@ -65,8 +66,12 @@ Variables:
        with each run of characters outside a-z and 0-9 replaced by "-" (feat/Login -> feat-login)
     3. the env files, in the order listed
     4. the environment of "devingress up"
-  An undefined variable is an error, except in "when". Caddy's own {placeholder} and {$ENV}
-  syntax passes through to Caddy untouched.
+  ${NAME:-default} uses default when NAME is unset or empty; ${NAME-default} only when it is
+  unset, so a set but empty NAME stays "". The default is literal text up to the first "}": no
+  ${} inside it, and it cannot contain "}". ${NAME:-} is "" when NAME is unset.
+  An undefined variable is an error, except in "when"; a reference with a default is never
+  undefined. Caddy's own {placeholder}, {$ENV} and {$ENV:default} syntax passes through to Caddy
+  untouched.
 
 Example:
 
@@ -90,7 +95,7 @@ Example:
 
   [[path]]
   prefix = "/auth-${slug}"
-  to = "${AUTH_PORT}"
+  to = "${AUTH_PORT:-3567}"         # 3567 when AUTH_PORT is unset or empty
   strip = true
   proxy = 'header_down Cache-Control "max-age=45"'
 `
