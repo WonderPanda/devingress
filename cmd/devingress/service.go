@@ -4,15 +4,20 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/WonderPanda/devingress/internal/launchd"
 	"github.com/WonderPanda/devingress/internal/service"
 )
 
-const serviceHelp = `Install or remove the systemd system unit that runs "devingress serve" at boot as you. systemd
-grants it the capability to bind ports below 1024, so there is no setcap to lose when the binary
-is reinstalled. Run it as your own user: it calls sudo for each privileged command. Run as root,
+const serviceHelp = `Install or remove what runs "devingress serve" in the background as you: a systemd system unit
+on Linux, a LaunchAgent on macOS. Run it as your own user.
+
+On Linux, systemd grants the unit the capability to bind ports below 1024, so there is no setcap to
+lose when the binary is reinstalled. service calls sudo for each privileged command. Run as root,
 it acts for SUDO_USER; it refuses to run serve as root.
 
 install writes /etc/systemd/system/devingress.service, turns on lingering for you (so
@@ -27,15 +32,24 @@ admin socket, and the system unit retries every 5s until it is free.
 uninstall stops and disables the unit, removes the file and reloads systemd. Lingering is left as
 it is.
 
+On macOS, serve binds loopback :80/:443 without root, so service needs no sudo, and refuses to
+run as root. install writes ~/Library/LaunchAgents/com.github.wonderpanda.devingress.plist and
+loads it with "launchctl bootstrap gui/<uid>", which starts serve now and at every login, and
+restarts it when it fails. The agent runs this binary's path with symlinks resolved, with PATH,
+XDG_CONFIG_HOME, XDG_STATE_HOME, XDG_DATA_HOME and XDG_RUNTIME_DIR when they are set here, and
+logs to ~/Library/Logs/devingress.log. When the agent is already loaded, install boots it out
+first. uninstall boots it out and removes the plist.
+
 Each command is printed before it runs. After reinstalling the binary at the same path,
-"sudo systemctl restart devingress" runs the new one.
+"sudo systemctl restart devingress" (Linux) or
+"launchctl kickstart -k gui/$(id -u)/com.github.wonderpanda.devingress" (macOS) runs the new one.
 
 Flags:
-  --print    print the unit and the commands as a shell script; run nothing, change nothing
+  --print    print the unit or plist and the commands as a shell script; run nothing, change nothing
 
 Exit codes:
   0  installed, uninstalled, or printed
-  1  not Linux with systemd, the unit would run as root, or a command failed
+  1  not Linux with systemd or macOS with launchctl, serve would run as root, or a command failed
   2  bad flag or argument
 
 Examples:
@@ -52,7 +66,13 @@ var (
 	}
 	serviceExecutable = os.Executable
 	serviceRun        = service.Exec
+	launchdSupported  = func() error { return launchd.Supported(os.Geteuid(), exec.LookPath) }
+	launchdLoaded     = launchd.Loaded
 )
+
+// hostOS picks what service and dns set up: systemd and systemd-resolved, or launchd and
+// /etc/resolver on darwin. Tests replace it.
+var hostOS = runtime.GOOS
 
 func serviceCmd(args []string, stdout io.Writer) error {
 	fs := flags("service")
@@ -63,6 +83,9 @@ func serviceCmd(args []string, stdout io.Writer) error {
 	}
 	if len(pos) != 1 || pos[0] != "install" && pos[0] != "uninstall" {
 		return usageError{fmt.Errorf("expected install or uninstall, got %q", pos)}
+	}
+	if hostOS == "darwin" {
+		return launchAgentCmd(pos[0], *printOnly, stdout)
 	}
 	if err := serviceSupported(); err != nil {
 		return err
@@ -79,11 +102,8 @@ func serviceCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	exe, err := serviceExecutable()
+	exe, err := serviceExe()
 	if err != nil {
-		return err
-	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
 	if _, err := os.Stat(service.UserUnit(acct)); err == nil {
@@ -98,6 +118,36 @@ func serviceCmd(args []string, stdout io.Writer) error {
 		}
 	}
 	return runSteps(service.Install(acct, service.Unit(acct, exe, os.Getenv)), *printOnly, serviceRun, stdout)
+}
+
+// launchAgentCmd installs or uninstalls the LaunchAgent: service on darwin.
+func launchAgentCmd(sub string, printOnly bool, stdout io.Writer) error {
+	if err := launchdSupported(); err != nil {
+		return err
+	}
+	acct, err := serviceAccount()
+	if err != nil {
+		return err
+	}
+	loaded := launchdLoaded(acct.UID)
+	if sub == "uninstall" {
+		return runSteps(launchd.Uninstall(acct.UID, acct.Home, loaded), printOnly, serviceRun, stdout)
+	}
+	exe, err := serviceExe()
+	if err != nil {
+		return err
+	}
+	plist := launchd.Plist(acct.Home, exe, os.Getenv)
+	return runSteps(launchd.Install(acct.UID, acct.Home, plist, loaded), printOnly, serviceRun, stdout)
+}
+
+// serviceExe is this binary's path with symlinks resolved, for the service to run.
+func serviceExe() (string, error) {
+	exe, err := serviceExecutable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
 }
 
 // runSteps prints each step and runs it with run or, with printOnly, prints the steps as a shell

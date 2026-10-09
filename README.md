@@ -76,6 +76,8 @@ Both bind ports 80 and 443, so run one per machine, or move devingress with
 
 ## Install
 
+### Linux
+
 Download the latest release (`linux/amd64` or `linux/arm64`) and check it against its checksum:
 
 ```sh
@@ -105,9 +107,40 @@ unit in `~/.config/systemd/user/devingress.service` and `setcap`, stop the user
 unit first with `systemctl --user disable --now devingress`; `service install`
 reminds you when that file exists.
 
+### macOS
+
+Download the latest release (`darwin/arm64` for Apple silicon, `darwin/amd64`
+for Intel), check it against its checksum and put it on your `PATH`:
+
+```sh
+arch=arm64   # or amd64
+curl -fsSLO "https://github.com/WonderPanda/devingress/releases/latest/download/devingress_darwin_$arch.tar.gz"
+curl -fsSLO "https://github.com/WonderPanda/devingress/releases/latest/download/checksums.txt"
+grep "devingress_darwin_$arch.tar.gz" checksums.txt | shasum -a 256 -c -
+tar -xzf "devingress_darwin_$arch.tar.gz" -C ~/.local/bin devingress   # any directory on PATH
+
+# Run serve at login, as you, on loopback :80/:443; no sudo
+devingress service install
+```
+
+`service install` writes a LaunchAgent,
+`~/Library/LaunchAgents/com.github.wonderpanda.devingress.plist`, and loads it
+with `launchctl bootstrap`: serve starts now and at every login, as you, and
+restarts when it fails. It logs to `~/Library/Logs/devingress.log`. No root is
+needed: macOS lets a non-root process bind ports below 1024 only on the
+wildcard address, so serve listens there with the socket bound to `lo0`, and
+only loopback traffic reaches it. If the macOS firewall asks whether to accept
+incoming connections, Deny; loopback is unaffected. After reinstalling the
+binary, `launchctl kickstart -k gui/$(id -u)/com.github.wonderpanda.devingress`
+runs the new one. `devingress service uninstall` removes the agent.
+
+### Certificates, DNS and containers
+
 **Certificates:** run `devingress trust` once. It installs devingress's own
 root CA into the system store, NSS (Chrome, Firefox) and Java, asking for
-`sudo` for the system store. If you already use
+`sudo` for the system store. On macOS the system store is the System keychain,
+which Safari, Chrome and curl use; Firefox needs `certutil` from
+`brew install nss`. If you already use
 [mkcert](https://github.com/FiloSottile/mkcert) (`mkcert -install`), you can
 skip this: devingress signs with mkcert's root, so everything that already
 trusts mkcert trusts devingress. Node.js ignores the system store; point it at
@@ -123,10 +156,17 @@ refuses; `--reset-global-dns` clears them, which affects every lookup on the
 machine. dnsmasq (`address=/example.dev/127.0.0.1`) and `*.localhost`, which
 resolved, browsers and curl already resolve to loopback, still work instead.
 
-Containers don't use the host's resolved; give them `extra_hosts`. To share
+On macOS, `dns setup` writes `/etc/resolver/example.dev` (`nameserver` and
+`port` from `dns_listen`) and flushes mDNSResponder's cache, asking for
+`sudo`. A per-domain resolver file wins for its domain, so there are no global
+servers to clear.
+
+Containers don't use the host's resolver; give them `extra_hosts`. To share
 the routing with them, a resolved drop-in with `DNSStubListenerExtra=172.17.0.1`
 makes resolved's stub listen on docker0, and containers given
-`dns: 172.17.0.1` get the same per-domain routing.
+`dns: 172.17.0.1` get the same per-domain routing. On macOS, Docker Desktop's
+`host.docker.internal` reaches the host's loopback, so `bind` needs no extra
+address for containers.
 
 ## Usage
 
@@ -212,7 +252,10 @@ Caddy's own `{placeholder}` syntax passes through untouched.
   naming the upstream and the checkout that owns the route. A raw `caddy` body
   keeps whatever error handling it writes.
 
-Optional host settings live in `~/.config/devingress/config.toml`:
+Optional host settings live in `~/.config/devingress/config.toml`. Paths follow
+XDG on macOS too, not `~/Library/Application Support`: config in
+`~/.config/devingress`, registered routes in `~/.local/state/devingress`,
+certificates in `~/.local/share/devingress`.
 
 ```toml
 bind = ["127.0.0.1", "172.17.0.1"]   # default: loopback + docker0 if present
@@ -226,4 +269,5 @@ dns_listen = "127.0.0.1:15353"       # serve's DNS listener; "" turns it off
 
 ## Status
 
-Early, and only run on Linux so far.
+Early. Runs on Linux (systemd, systemd-resolved) and macOS (launchd,
+`/etc/resolver`).

@@ -114,7 +114,7 @@ func UserUnit(a Account) string {
 // Supported reports why this machine cannot run the unit, if it cannot.
 func Supported() error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("devingress service needs Linux with systemd, not %s", runtime.GOOS)
+		return fmt.Errorf("devingress service needs Linux with systemd, or macOS, not %s", runtime.GOOS)
 	}
 	if _, err := os.Stat("/run/systemd/system"); err != nil {
 		return errors.New("devingress service needs systemd, and /run/systemd/system does not exist")

@@ -112,3 +112,23 @@ func TestTrustExclusiveFlags(t *testing.T) {
 		t.Errorf("exit %d, stdout %q, stderr %q", code, stdout, stderr)
 	}
 }
+
+func TestTrustText(t *testing.T) {
+	if help, stores := trustText("linux"); help != linuxTrustHelp || stores != linuxTrustStores {
+		t.Error("Linux trust text changed")
+	}
+	help, stores := trustText("darwin")
+	for _, want := range []string{"the System keychain (Safari, Chrome, curl), through sudo", "(brew install nss)", "$JAVA_HOME's cacerts"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("darwin help lacks %q:\n%s", want, help)
+		}
+	}
+	if strings.Contains(help, "nssdb") || strings.Contains(stores, "nssdb") || !strings.Contains(stores, "System keychain") {
+		t.Errorf("darwin text names Linux's stores:\n%s\n%s", help, stores)
+	}
+	for i, line := range strings.Split("usage: devingress trust [--uninstall] [--path]\n\n"+help, "\n") {
+		if len(line) > 100 {
+			t.Errorf("darwin help line %d is %d columns", i+1, len(line))
+		}
+	}
+}

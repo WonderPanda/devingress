@@ -9,12 +9,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/WonderPanda/devingress/internal/launchd"
 	"github.com/WonderPanda/devingress/internal/service"
 )
 
-// fakeService replaces everything service touches with a dev account whose home is a temp dir,
-// an executable reached through a symlink, and a runner that records each step instead of
-// running it. It returns the home, the executable's real path, and the recorded steps.
+// fakeService replaces everything service touches, on Linux, with a dev account whose home is a
+// temp dir, an executable reached through a symlink, and a runner that records each step instead
+// of running it. It returns the home, the executable's real path, and the recorded steps.
 func fakeService(t *testing.T) (home, exe string, ran *[]service.Step) {
 	t.Helper()
 	isolate(t)
@@ -37,10 +38,11 @@ func fakeService(t *testing.T) (home, exe string, ran *[]service.Step) {
 		t.Fatal(err)
 	}
 	ran = &[]service.Step{}
-	supported, account, executable, run := serviceSupported, serviceAccount, serviceExecutable, serviceRun
+	goos, supported, account, executable, run := hostOS, serviceSupported, serviceAccount, serviceExecutable, serviceRun
 	t.Cleanup(func() {
-		serviceSupported, serviceAccount, serviceExecutable, serviceRun = supported, account, executable, run
+		hostOS, serviceSupported, serviceAccount, serviceExecutable, serviceRun = goos, supported, account, executable, run
 	})
+	hostOS = "linux"
 	serviceSupported = func() error { return nil }
 	serviceAccount = func() (service.Account, error) {
 		return service.Account{Name: "dev", Group: "devs", UID: "1000", GID: "1001", Home: home}, nil
@@ -218,5 +220,111 @@ func TestServiceFailures(t *testing.T) {
 		if code, _, stderr := runCLI(t, args...); code != 2 || !strings.Contains(stderr, "expected install or uninstall") {
 			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
 		}
+	}
+}
+
+// fakeLaunchAgent is fakeService on macOS, as a user with launchctl, with the agent loaded or not.
+func fakeLaunchAgent(t *testing.T, loaded bool) (home, exe string, ran *[]service.Step) {
+	t.Helper()
+	home, exe, ran = fakeService(t)
+	t.Setenv("PATH", "/opt/homebrew/bin:/usr/bin:/bin")
+	goos, supported, isLoaded := hostOS, launchdSupported, launchdLoaded
+	t.Cleanup(func() { hostOS, launchdSupported, launchdLoaded = goos, supported, isLoaded })
+	hostOS = "darwin"
+	launchdSupported = func() error {
+		return launchd.Supported(1000, func(string) (string, error) { return "/bin/launchctl", nil })
+	}
+	launchdLoaded = func(uid string) bool {
+		if uid != "1000" {
+			t.Errorf("probed uid %s, want 1000", uid)
+		}
+		return loaded
+	}
+	return home, exe, ran
+}
+
+func TestLaunchAgentInstallPrint(t *testing.T) {
+	for _, loaded := range []bool{false, true} {
+		home, exe, ran := fakeLaunchAgent(t, loaded)
+		userUnit(t, home) // Linux's user unit means nothing on macOS
+		plistPath := home + "/Library/LaunchAgents/com.github.wonderpanda.devingress.plist"
+		plist := launchd.Plist(home, exe, os.Getenv)
+		want := "mkdir -p " + home + "/Library/LaunchAgents " + home + "/Library/Logs\n" +
+			"tee " + plistPath + " >/dev/null <<'EOF'\n" + plist + "EOF\n" +
+			"launchctl bootstrap gui/1000 " + plistPath + "\n"
+		if loaded {
+			want = "launchctl bootout gui/1000/com.github.wonderpanda.devingress\n" + want
+		}
+		code, stdout, stderr := runCLI(t, "service", "install", "--print")
+		if code != 0 || stderr != "" || stdout != want {
+			t.Errorf("loaded=%v: exit %d, stderr %q, stdout:\n%s\nwant:\n%s", loaded, code, stderr, stdout, want)
+		}
+		for _, s := range []string{"<string>" + exe + "</string>", "<key>PATH</key>\n\t\t<string>/opt/homebrew/bin:/usr/bin:/bin</string>",
+			"<key>XDG_STATE_HOME</key>\n\t\t<string>/home/dev/state</string>", "<key>XDG_RUNTIME_DIR</key>"} {
+			if !strings.Contains(plist, s) {
+				t.Errorf("plist lacks %q:\n%s", s, plist)
+			}
+		}
+		if strings.Contains(plist, "XDG_CONFIG_HOME") {
+			t.Errorf("plist sets the unset XDG_CONFIG_HOME:\n%s", plist)
+		}
+		if len(*ran) != 0 {
+			t.Errorf("--print ran %q", stepLines(*ran))
+		}
+	}
+}
+
+func TestLaunchAgentInstall(t *testing.T) {
+	home, exe, ran := fakeLaunchAgent(t, false)
+	code, stdout, stderr := runCLI(t, "service", "install")
+	want := []string{
+		"mkdir -p " + home + "/Library/LaunchAgents " + home + "/Library/Logs",
+		"tee " + home + "/Library/LaunchAgents/com.github.wonderpanda.devingress.plist",
+		"launchctl bootstrap gui/1000 " + home + "/Library/LaunchAgents/com.github.wonderpanda.devingress.plist",
+	}
+	if code != 0 || stderr != "" || !slices.Equal(stepLines(*ran), want) {
+		t.Fatalf("exit %d, stderr %q, ran %q, want %q", code, stderr, stepLines(*ran), want)
+	}
+	if (*ran)[1].Stdin != launchd.Plist(home, exe, os.Getenv) {
+		t.Errorf("tee got:\n%s", (*ran)[1].Stdin)
+	}
+	if wantOut := "+ " + strings.Join(want, "\n+ ") + "\n"; stdout != wantOut {
+		t.Errorf("stdout:\n%s\nwant:\n%s", stdout, wantOut)
+	}
+}
+
+func TestLaunchAgentUninstall(t *testing.T) {
+	for _, loaded := range []bool{false, true} {
+		home, _, ran := fakeLaunchAgent(t, loaded)
+		want := []string{"rm -f " + home + "/Library/LaunchAgents/com.github.wonderpanda.devingress.plist"}
+		if loaded {
+			want = append([]string{"launchctl bootout gui/1000/com.github.wonderpanda.devingress"}, want...)
+		}
+		code, stdout, stderr := runCLI(t, "service", "uninstall", "--print")
+		if code != 0 || stderr != "" || stdout != strings.Join(want, "\n")+"\n" || len(*ran) != 0 {
+			t.Errorf("loaded=%v --print: exit %d, stderr %q, ran %q, stdout:\n%s", loaded, code, stderr, stepLines(*ran), stdout)
+		}
+		code, stdout, stderr = runCLI(t, "service", "uninstall")
+		if code != 0 || stderr != "" || !slices.Equal(stepLines(*ran), want) || stdout != "+ "+strings.Join(want, "\n+ ")+"\n" {
+			t.Errorf("loaded=%v: exit %d, stderr %q, ran %q, stdout:\n%s", loaded, code, stderr, stepLines(*ran), stdout)
+		}
+	}
+}
+
+func TestLaunchAgentRefusesRoot(t *testing.T) {
+	_, _, ran := fakeLaunchAgent(t, true)
+	launchdSupported = func() error {
+		return launchd.Supported(0, func(string) (string, error) { return "/bin/launchctl", nil })
+	}
+	for _, sub := range []string{"install", "uninstall"} {
+		for _, args := range [][]string{{"service", sub, "--print"}, {"service", sub}} {
+			code, stdout, stderr := runCLI(t, args...)
+			if code != 1 || stdout != "" || !strings.Contains(stderr, "as your own user, without sudo") {
+				t.Errorf("%v as root: exit %d, stdout %q, stderr %q", args, code, stdout, stderr)
+			}
+		}
+	}
+	if len(*ran) != 0 {
+		t.Errorf("as root, ran %q", stepLines(*ran))
 	}
 }

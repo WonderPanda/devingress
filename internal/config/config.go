@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -76,15 +77,39 @@ func Load() (Config, error) {
 	return c, nil
 }
 
+// LoopbackNetwork is the Caddy network that serve registers on macOS to listen on loopback
+// :80/:443 without root: macOS lets a non-root process bind a port below 1024 only on the
+// wildcard address, so the network listens there, restricted to lo0.
+const LoopbackNetwork = "devingress-lo0"
+
+// goos is the OS Render renders for; tests replace it.
+var goos = runtime.GOOS
+
 func (c Config) Render() render.Options {
 	return render.Options{
 		AdminSocket: AdminSocket(),
 		StorageDir:  CaddyDir(),
 		CARoot:      c.CARoot,
-		Bind:        c.Bind,
+		Bind:        bindAddrs(goos, c.Bind),
 		HTTPPort:    c.HTTPPort,
 		HTTPSPort:   c.HTTPSPort,
 	}
+}
+
+// bindAddrs are bind's addresses as Caddy listens on them: on macOS, loopback addresses go
+// through LoopbackNetwork. Everything else, and every address elsewhere, is as written.
+func bindAddrs(goos string, bind []string) []string {
+	if goos != "darwin" {
+		return bind
+	}
+	out := make([]string, len(bind))
+	for i, b := range bind {
+		out[i] = b
+		if ip := net.ParseIP(b); ip != nil && ip.IsLoopback() {
+			out[i] = LoopbackNetwork + "/" + b
+		}
+	}
+	return out
 }
 
 // RootCert is the absolute path of the root certificate serve signs with:

@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"maps"
 	"math/big"
 	"net"
 	"os"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/miekg/dns"
 
+	"github.com/WonderPanda/devingress/internal/launchd"
 	"github.com/WonderPanda/devingress/internal/localdns"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/service"
@@ -502,5 +504,96 @@ func TestCheckUpstreams(t *testing.T) {
 	slices.Sort(dialed)
 	if !slices.Equal(dialed, []string{"127.0.0.1:3000", "127.0.0.1:3001"}) {
 		t.Errorf("dialed %v; want each live upstream once, never the gone owner's or the placeholder", dialed)
+	}
+}
+
+func TestCheckDNSRoutesDarwin(t *testing.T) {
+	dir := t.TempDir()
+	owners := []routefile.Owner{{Dir: dir, Sites: []routefile.Site{
+		{Host: "web.example.dev"}, {Host: "web.app.localhost"}, {Host: "web.other.dev"},
+	}}}
+	files := map[string]string{
+		"/etc/resolver/example.dev": "# Written by devingress: routes example.dev to serve's DNS listener.\nnameserver 127.0.0.1\nport 15353\n",
+		"/etc/resolver/other.dev":   "nameserver 10.0.0.1\n", // someone else's
+	}
+	deps := Deps{
+		GOOS: "darwin",
+		Glob: func(pattern string) ([]string, error) {
+			if pattern != "/etc/resolver/*" {
+				t.Errorf("glob %q", pattern)
+			}
+			return slices.Sorted(maps.Keys(files)), nil
+		},
+		ReadFile: func(name string) ([]byte, error) {
+			if f, ok := files[name]; ok {
+				return []byte(f), nil
+			}
+			return nil, os.ErrNotExist
+		},
+		Lookup: func(host string) ([]net.IP, error) {
+			if strings.HasSuffix(host, ".localhost") {
+				return []net.IP{net.ParseIP("127.0.0.1")}, nil
+			}
+			return nil, errors.New("no such host")
+		},
+	}
+	checks := checkDNSRoutes(deps, owners)
+	want := []struct {
+		status  Status
+		message string
+	}{
+		{OK, "routed to the DNS listener by /etc/resolver/example.dev"},
+		{OK, "no devingress resolver file, but resolves to loopback"},
+		{Warn, "no devingress resolver file in /etc/resolver routes it, and it does not resolve to loopback"},
+	}
+	if len(checks) != len(want) {
+		t.Fatalf("got %d checks, want %d: %+v", len(checks), len(want), checks)
+	}
+	for i, c := range checks {
+		if c.Check != "dns" || c.Status != want[i].status || c.Message != want[i].message {
+			t.Errorf("%s: %+v, want %s %q", owners[0].Sites[i].Host, c, want[i].status, want[i].message)
+		}
+	}
+	if !strings.HasPrefix(checks[2].Fix, "devingress dns setup other.dev") {
+		t.Errorf("fix: %q", checks[2].Fix)
+	}
+}
+
+func TestCheckServiceDarwin(t *testing.T) {
+	const exe = "/opt/devingress"
+	t.Setenv("HOME", "/Users/dev")
+	plistPath := "/Users/dev/Library/LaunchAgents/com.github.wonderpanda.devingress.plist"
+	plist := func(exe string) func(string) ([]byte, error) {
+		return func(name string) ([]byte, error) {
+			if name != plistPath {
+				t.Fatalf("read %s, want %s", name, plistPath)
+			}
+			return []byte(launchd.Plist("/Users/dev", exe, func(string) string { return "" })), nil
+		}
+	}
+	executable := func() (string, error) { return exe, nil }
+
+	notInstalled := Deps{GOOS: "darwin", ReadFile: func(string) ([]byte, error) { return nil, os.ErrNotExist }}
+	if got := checkService(notInstalled); got != nil {
+		t.Errorf("not installed: %+v", got)
+	}
+
+	got := checkService(Deps{GOOS: "darwin", ReadFile: plist(exe), Executable: executable})
+	if len(got) != 1 || got[0].Status != OK || got[0].Subject != plistPath ||
+		got[0].Message != "ProgramArguments matches the running binary" {
+		t.Errorf("matching ProgramArguments: %+v", got)
+	}
+
+	got = checkService(Deps{GOOS: "darwin", ReadFile: plist("/old/devingress"), Executable: executable})
+	if len(got) != 1 || got[0].Status != Warn || got[0].Fix != `rerun "devingress service install"` ||
+		got[0].Message != `ProgramArguments is ["/old/devingress" "serve"], not the running binary (["/opt/devingress" "serve"])` {
+		t.Errorf("stale ProgramArguments: %+v", got)
+	}
+
+	none := Deps{GOOS: "darwin", Executable: executable,
+		ReadFile: func(string) ([]byte, error) { return []byte(`<plist version="1.0"><dict></dict></plist>`), nil }}
+	got = checkService(none)
+	if len(got) != 1 || got[0].Status != Warn || got[0].Message != "no ProgramArguments found" {
+		t.Errorf("no ProgramArguments: %+v", got)
 	}
 }

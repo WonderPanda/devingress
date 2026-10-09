@@ -94,7 +94,7 @@ func GlobalServers(resolvectlDNS string) ([]string, error) {
 // Supported reports why this machine cannot route a domain through resolved, if it cannot.
 func Supported() error {
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("devingress dns needs Linux with systemd-resolved, not %s", runtime.GOOS)
+		return fmt.Errorf("devingress dns needs Linux with systemd-resolved, or macOS, not %s", runtime.GOOS)
 	}
 	if _, err := os.Stat(RunDir); err != nil {
 		return errors.New("devingress dns needs systemd-resolved, and " + RunDir + " does not exist")
