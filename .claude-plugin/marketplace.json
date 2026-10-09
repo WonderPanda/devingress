@@ -1,0 +1,12 @@
+{
+  "name": "devingress",
+  "owner": { "name": "Jesse Carter" },
+  "description": "devingress: teach Claude Code and Codex to give a project HTTPS routes with devingress.toml",
+  "plugins": [
+    {
+      "name": "devingress",
+      "source": "./plugins/devingress",
+      "description": "/devingress:setup writes and registers a project's devingress.toml"
+    }
+  ]
+}

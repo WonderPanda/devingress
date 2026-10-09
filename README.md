@@ -239,6 +239,27 @@ Caddy's own `{placeholder}` syntax passes through untouched.
 `devingress help routefile` prints the full `devingress.toml` reference, and
 `devingress help <command>` each command's flags, files and exit codes.
 
+## Coding agents
+
+This repo is also a plugin for Claude Code and Codex. Its `/devingress:setup`
+skill (`$devingress:setup` in Codex) has an agent working in another project
+find that project's dev servers and ports, write its `devingress.toml`, run
+`devingress up` and check the URLs with `devingress status` and
+`devingress doctor`. It leaves machine setup (`service install`, `dns setup`,
+`trust`) to you.
+
+```sh
+claude plugin marketplace add WonderPanda/devingress
+claude plugin install devingress@devingress
+claude plugin marketplace update devingress && claude plugin update devingress@devingress   # later, for changes
+
+codex plugin marketplace add git@github.com:WonderPanda/devingress.git
+codex plugin add devingress@devingress
+```
+
+The repo is private, so Codex uses the SSH URL: its `owner/repo` form clones
+over HTTPS, which needs a git credential helper.
+
 ## How it works
 
 - Each `up`/`down` merges every live checkout's routes into one config and

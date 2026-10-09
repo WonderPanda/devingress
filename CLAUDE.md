@@ -32,6 +32,10 @@ the route file format.
   `doctor`.
 - `internal/doctor/`: the read-only checks behind `devingress doctor`, each one a function taking
   its own injectable dependencies (resolver, dialer, cert pool, file reads).
+- `.claude-plugin/marketplace.json` and `plugins/devingress/`: the Claude Code and Codex plugin. Its
+  `setup` skill teaches agents in other projects to write and register a `devingress.toml`.
+  `internal/routefile/skill_test.go` loads every `toml` block in its `SKILL.md` and checks the
+  manifests point at each other.
 
 ## Commands
 
@@ -42,6 +46,8 @@ go test -tags e2e ./e2e/...   # builds the binary, runs an isolated serve on fre
 go vet ./...
 go vet -tags e2e ./...
 gofmt -l .               # must print nothing; `gofmt -w .` fixes it
+claude plugin validate .   # when claude is installed; the only warning is the missing version
+claude plugin validate plugins/devingress
 ```
 
 Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e/...`, `go vet ./...`
@@ -69,6 +75,8 @@ Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e
 - Never run `launchctl`, `security` or `killall`. Tests replace every function that would, and
   write nothing outside `t.TempDir()`. The darwin-only code (`_darwin.go`) is checked by
   `GOOS=darwin go vet ./...` and the CI `macos` job.
+- A change to the route file format (`internal/routefile/help.go`) or to a flag or command the
+  `setup` skill names updates `plugins/devingress/skills/setup/SKILL.md`.
 
 ## Pull requests
 
