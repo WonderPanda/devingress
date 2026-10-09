@@ -178,8 +178,7 @@ func startInstance(root, caRoot, dnsAddr string) (*instance, error) {
 	in.cmd = exec.Command(bin, "serve")
 	in.cmd.Env = in.env
 	in.cmd.Stdout, in.cmd.Stderr = in.log, in.log
-	// If the test binary dies without running stop, take serve with it.
-	in.cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	in.cmd.SysProcAttr = serveProcAttr()
 	if err := in.cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -251,7 +250,13 @@ func newCheckout(in *instance, dir, branch, routes string) error {
 // checkout is newCheckout under a per-test dir that is removed afterwards.
 func checkout(t *testing.T, in *instance, branch, routes string) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), branch)
+	// devingress names owners by their resolved path, and macOS's temp dir is
+	// under /var, a symlink to /private/var.
+	tmp, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(tmp, branch)
 	if err := newCheckout(in, dir, branch, routes); err != nil {
 		t.Fatal(err)
 	}

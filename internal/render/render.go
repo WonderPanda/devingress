@@ -34,8 +34,8 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("{\n")
-	fmt.Fprintf(&b, "\tadmin unix/%s\n", o.AdminSocket)
-	fmt.Fprintf(&b, "\tstorage file_system %s\n", o.StorageDir)
+	fmt.Fprintf(&b, "\tadmin %s\n", quotePath("unix/"+o.AdminSocket))
+	fmt.Fprintf(&b, "\tstorage file_system %s\n", quotePath(o.StorageDir))
 	b.WriteString("\tlocal_certs\n\tskip_install_trust\n")
 	fmt.Fprintf(&b, "\thttp_port %d\n\thttps_port %d\n", o.HTTPPort, o.HTTPSPort)
 	if len(o.Bind) > 0 {
@@ -47,7 +47,8 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	if o.CARoot != "" {
 		// mkcert's root is pathlen:0, so it cannot sign an intermediate. It
 		// stands in as Caddy's intermediate too, signing leaves directly.
-		ca := fmt.Sprintf("{\n\t\t\t\tcert %s/rootCA.pem\n\t\t\t\tkey %s/rootCA-key.pem\n\t\t\t}", o.CARoot, o.CARoot)
+		ca := fmt.Sprintf("{\n\t\t\t\tcert %s\n\t\t\t\tkey %s\n\t\t\t}",
+			quotePath(o.CARoot+"/rootCA.pem"), quotePath(o.CARoot+"/rootCA-key.pem"))
 		fmt.Fprintf(&b, "\tpki {\n\t\tca local {\n\t\t\troot %s\n\t\t\tintermediate %s\n\t\t}\n\t}\n", ca, ca)
 	}
 	b.WriteString("}\n")
@@ -124,6 +125,12 @@ func writeUnreachable(b *strings.Builder, indent, upstream, what, owner string) 
 // quoteLiteral escapes text for a double-quoted Caddyfile token whose value
 // is placeholder-expanded at request time, so it comes out as written.
 var quoteLiteral = strings.NewReplacer(`"`, `\"`, "{", `\{`, "}", `\}`)
+
+// quotePath makes a filesystem path one Caddyfile token, so a space (macOS's
+// "Application Support") does not split it into several.
+func quotePath(p string) string {
+	return `"` + strings.ReplaceAll(p, `"`, `\"`) + `"`
+}
 
 func writeProxy(b *strings.Builder, indent, upstream, retry, raw string) {
 	if retry == "" && raw == "" {

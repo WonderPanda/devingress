@@ -61,6 +61,14 @@ jobs:
       - name: lo0 listener tests
         run: go test -v -run 'TestLoopbackNetwork' ./internal/ingress/
 
+      - name: go vet (e2e)
+        run: go vet -tags e2e ./...
+
+      # macOS's temp dir sits behind the /var -> /private/var symlink, and its
+      # serve binds loopback through the lo0 network.
+      - name: e2e
+        run: go test -tags e2e -v ./e2e/...
+
   e2e:
     runs-on: ubuntu-latest
     steps:

@@ -1,9 +1,18 @@
 package render
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 
@@ -55,6 +64,67 @@ reverse_proxy 127.0.0.1:10301 {
 	}
 	if !strings.Contains(string(cfg), "orchard-note-findings.eluve.dev") {
 		t.Errorf("adapted JSON lost a host")
+	}
+}
+
+// macOS keeps mkcert's root in ~/Library/Application Support, and a home dir
+// can hold a space too: every path must stay one token.
+func TestCaddyfilePathsWithSpaces(t *testing.T) {
+	dir := t.TempDir() + "/Application Support"
+	o := opts(t)
+	o.AdminSocket = dir + "/admin.sock"
+	o.StorageDir = dir + "/caddy"
+	o.CARoot = dir + "/mkcert"
+	writeCA(t, o.CARoot)
+	text, err := Caddyfile(o, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Adapt(text)
+	if err != nil {
+		t.Fatalf("adapt: %v\n%s", err, text)
+	}
+	for _, want := range []string{"unix/" + o.AdminSocket, o.StorageDir, o.CARoot + "/rootCA.pem", o.CARoot + "/rootCA-key.pem"} {
+		w, _ := json.Marshal(want)
+		if !strings.Contains(string(cfg), string(w)) {
+			t.Errorf("adapted JSON missing %s:\n%s", w, cfg)
+		}
+	}
+}
+
+// writeCA writes a throwaway root, rootCA.pem and rootCA-key.pem, to dir: Adapt
+// provisions the pki app, which loads them.
+func writeCA(t *testing.T, dir string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "devingress render test root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/rootCA.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/rootCA-key.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
