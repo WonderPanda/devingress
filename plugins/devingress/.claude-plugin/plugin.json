@@ -1,0 +1,6 @@
+{
+  "name": "devingress",
+  "description": "/devingress:setup writes and registers a project's devingress.toml",
+  "author": { "name": "Jesse Carter" },
+  "repository": "https://github.com/WonderPanda/devingress"
+}
