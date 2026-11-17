@@ -329,28 +329,24 @@ func TestCaddyOwnRoot(t *testing.T) {
 	}
 }
 
-// TestDNS queries the instance's DNS listener the way systemd-resolved would, for a registered
-// host: A is 127.0.0.1 and AAAA ::1, over UDP and TCP.
+// TestDNS queries the instance's DNS listener the way systemd-resolved would when its global
+// scope is the default route (#38): a registered host under a domain "devingress dns setup" never
+// routed, and a public name, both get REFUSED with no records over UDP and TCP, so the resolver
+// moves on instead of caching loopback. The harness cannot write the system's drop-in or resolver
+// directory, so the in-domain answers are covered by internal/localdns's tests.
 func TestDNS(t *testing.T) {
 	for _, network := range []string{"udp", "tcp"} {
-		for qtype, want := range map[uint16]string{dns.TypeA: "127.0.0.1", dns.TypeAAAA: "::1"} {
-			q := new(dns.Msg).SetQuestion(dns.Fqdn(webHost), qtype)
-			r, _, err := (&dns.Client{Net: network}).Exchange(q, srv.dnsAddr)
-			if err != nil {
-				t.Fatalf("%s %s: %v", network, dns.TypeToString[qtype], err)
-			}
-			var got []string
-			for _, rr := range r.Answer {
-				switch rr := rr.(type) {
-				case *dns.A:
-					got = append(got, rr.A.String())
-				case *dns.AAAA:
-					got = append(got, rr.AAAA.String())
+		for _, name := range []string{webHost, "api.github.com"} {
+			for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+				q := new(dns.Msg).SetQuestion(dns.Fqdn(name), qtype)
+				r, _, err := (&dns.Client{Net: network}).Exchange(q, srv.dnsAddr)
+				if err != nil {
+					t.Fatalf("%s %s %s: %v", network, name, dns.TypeToString[qtype], err)
 				}
-			}
-			if r.Rcode != dns.RcodeSuccess || !slices.Equal(got, []string{want}) {
-				t.Errorf("%s %s %s: %s %v, want %s", network, webHost, dns.TypeToString[qtype],
-					dns.RcodeToString[r.Rcode], got, want)
+				if r.Rcode != dns.RcodeRefused || len(r.Answer) != 0 {
+					t.Errorf("%s %s %s: %s %v, want REFUSED and no answer", network, name, dns.TypeToString[qtype],
+						dns.RcodeToString[r.Rcode], r.Answer)
+				}
 			}
 		}
 	}

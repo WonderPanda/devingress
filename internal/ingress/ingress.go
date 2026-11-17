@@ -183,7 +183,7 @@ func Serve() error {
 	_ = os.Remove(config.AdminSocket())
 
 	if cfg.DNSListen != "" {
-		dns, err := localdns.Listen(cfg.DNSListen)
+		dns, err := localdns.Listen(cfg.DNSListen, localdns.Routed)
 		if err != nil {
 			return err
 		}

@@ -28,6 +28,38 @@ func DropInName(domain string) string { return "devingress-" + domain + ".conf" 
 // DropInPath is DropInName in Dir.
 func DropInPath(domain string) string { return filepath.Join(Dir, DropInName(domain)) }
 
+// DropInDomain is the domain whose DropInName is name, if name is one.
+func DropInDomain(name string) (string, bool) {
+	prefix, suffix, _ := strings.Cut(DropInName("*"), "*")
+	d, ok := strings.CutPrefix(name, prefix)
+	if !ok {
+		return "", false
+	}
+	d, ok = strings.CutSuffix(d, suffix)
+	if !ok || d == "" {
+		return "", false
+	}
+	return d, true
+}
+
+// Domains lists the domains routed by the devingress drop-ins in dir (Dir, outside tests): each
+// DropInName file whose Domains= line has its ~domain.
+func Domains(dir string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, DropInName("*")))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range paths {
+		domain, ok := DropInDomain(filepath.Base(p))
+		data, err := os.ReadFile(p)
+		if ok && err == nil && RoutesDomain(string(data), domain) {
+			out = append(out, domain)
+		}
+	}
+	return out, nil
+}
+
 var domainRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
 
 // Domain normalizes a domain from the command line: lower case, no trailing dot.

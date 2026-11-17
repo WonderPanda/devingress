@@ -2,6 +2,7 @@ package resolved
 
 import (
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -71,5 +72,33 @@ func TestDomain(t *testing.T) {
 		if got, err := Domain(arg); err == nil {
 			t.Errorf("%q: got %q, want an error", arg, got)
 		}
+	}
+}
+
+func TestDomains(t *testing.T) {
+	for name, want := range map[string]string{
+		DropInName("example.dev"): "example.dev", "devingress-.conf": "", "eluve-dev.conf": "", "devingress-x.dev": "",
+	} {
+		if got, ok := DropInDomain(name); got != want || ok != (want != "") {
+			t.Errorf("DropInDomain(%q) = %q, %v; want %q", name, got, ok, want)
+		}
+	}
+
+	dir := t.TempDir()
+	for name, conf := range map[string]string{
+		DropInName("example.dev"): DropIn("127.0.0.1:15353", "example.dev", true),
+		DropInName("stale.dev"):   "[Resolve]\nDNS=127.0.0.1:15353\n",
+		"eluve-dev.conf":          "[Resolve]\nDNS=127.0.0.1:5354\nDomains=~eluve.dev\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(conf), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Domains(dir)
+	if err != nil || !slices.Equal(got, []string{"example.dev"}) {
+		t.Errorf("Domains = %q, %v; want [example.dev]", got, err)
+	}
+	if got, err := Domains(filepath.Join(dir, "missing")); err != nil || len(got) != 0 {
+		t.Errorf("missing dir: %q, %v", got, err)
 	}
 }

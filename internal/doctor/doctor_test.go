@@ -25,6 +25,7 @@ import (
 
 	"github.com/WonderPanda/devingress/internal/launchd"
 	"github.com/WonderPanda/devingress/internal/localdns"
+	"github.com/WonderPanda/devingress/internal/resolved"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/service"
 )
@@ -387,14 +388,38 @@ func TestRunBadConfigShortCircuits(t *testing.T) {
 }
 
 func TestCheckDNSListen(t *testing.T) {
-	s, err := localdns.Listen("127.0.0.1:0")
+	// The listener and doctor read the same drop-in, as serve and doctor read resolved.Dir.
+	dropIns := t.TempDir()
+	s, err := localdns.Listen("127.0.0.1:0", func() ([]string, error) { return resolved.Domains(dropIns) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	deps := DefaultDeps()
-	if got := checkDNSListen(deps, s.Addr()); got.Status != OK || got.Subject != s.Addr()+" (dns_listen)" {
-		t.Errorf("pass: %+v", got)
+	deps.GOOS = "linux"
+	deps.Glob = func(pattern string) ([]string, error) {
+		return filepath.Glob(filepath.Join(dropIns, filepath.Base(pattern)))
+	}
+	if got := checkDNSListen(deps, s.Addr()); got.Status != OK || !strings.Contains(got.Message, "refuses every name") {
+		t.Errorf("no domain routed: %+v", got)
+	}
+	conf := resolved.DropIn("127.0.0.1:15353", "example.dev", false)
+	if err := os.WriteFile(filepath.Join(dropIns, resolved.DropInName("example.dev")), []byte(conf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkDNSListen(deps, s.Addr()); got.Status != OK || got.Subject != s.Addr()+" (dns_listen)" ||
+		got.Message != "DNS listener answers 127.0.0.1" {
+		t.Errorf("example.dev routed: %+v", got)
+	}
+
+	// A drop-in serve does not see: the listener refuses the probe.
+	elsewhere := deps
+	elsewhere.Glob = func(string) ([]string, error) { return []string{"/x/" + resolved.DropInName("other.dev")}, nil }
+	elsewhere.ReadFile = func(string) ([]byte, error) {
+		return []byte(resolved.DropIn("127.0.0.1:15353", "other.dev", false)), nil
+	}
+	if got := checkDNSListen(elsewhere, s.Addr()); got.Status != Fail {
+		t.Errorf("refused for a routed domain: %+v", got)
 	}
 
 	closed := net.JoinHostPort("127.0.0.1", strconv.Itoa(freePort(t)))
@@ -407,7 +432,11 @@ func TestCheckDNSListen(t *testing.T) {
 		r.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: q.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET},
 			A: net.ParseIP("93.184.216.34")}}
 		return r, nil
-	}}
+	}, Glob: func(string) ([]string, error) { return nil, nil }}
+	if got := checkDNSListen(other, "127.0.0.1:15353"); got.Status != Fail || !strings.Contains(got.Message, "not REFUSED") {
+		t.Errorf("another server, no domain routed: %+v", got)
+	}
+	other.Glob, other.ReadFile = elsewhere.Glob, elsewhere.ReadFile
 	if got := checkDNSListen(other, "127.0.0.1:15353"); got.Status != Fail || !strings.Contains(got.Message, "not 127.0.0.1") {
 		t.Errorf("another server: %+v", got)
 	}

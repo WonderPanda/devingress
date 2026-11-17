@@ -5,6 +5,7 @@ package macresolver
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,6 +32,22 @@ func File(listen, domain string) (string, error) {
 
 // Ours reports whether file, the content of a resolver file, was written by devingress.
 func Ours(file string) bool { return strings.HasPrefix(file, Marker+":") }
+
+// Domains lists the domains routed by the resolver files devingress wrote in dir (Dir, outside
+// tests): each file is named for its domain.
+func Domains(dir string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "*"))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range paths {
+		if data, err := os.ReadFile(p); err == nil && Ours(string(data)) {
+			out = append(out, filepath.Base(p))
+		}
+	}
+	return out, nil
+}
 
 // flush drops mDNSResponder's cached answers, the negative ones among them.
 var flush = service.Step{Args: []string{"sudo", "killall", "-HUP", "mDNSResponder"}}

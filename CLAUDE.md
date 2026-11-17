@@ -18,7 +18,8 @@ the route file format.
   commands.
 - `internal/launchd/`: the LaunchAgent `devingress service install` writes on macOS, and its
   launchctl commands.
-- `internal/localdns/`: serve's wildcard DNS listener (A 127.0.0.1, AAAA ::1 for every name).
+- `internal/localdns/`: serve's DNS listener (A 127.0.0.1, AAAA ::1 for every name under a domain
+  `devingress dns setup` routed to it, REFUSED for every other name).
 - `internal/resolved/`: the systemd-resolved drop-in `devingress dns setup` writes on Linux, and its
   commands.
 - `internal/macresolver/`: the `/etc/resolver/<domain>` file `devingress dns setup` writes on macOS,

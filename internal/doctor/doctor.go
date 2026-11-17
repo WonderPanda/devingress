@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -237,13 +238,31 @@ func checkBind(deps Deps, bind []string) []Check {
 	return out
 }
 
+// checkDNSListen asks the DNS listener for a name under the first routed domain, which serve
+// answers with loopback. With no domain routed, serve refuses every name, so it asks for one
+// and expects REFUSED.
 func checkDNSListen(deps Deps, addr string) Check {
-	q := new(dns.Msg).SetQuestion("doctor.devingress.", dns.TypeA)
+	domains := slices.Sorted(maps.Keys(routedDomains(deps)))
+	name := "doctor.devingress."
+	if len(domains) > 0 {
+		name = "devingress-doctor." + domains[0] + "."
+	}
+	q := new(dns.Msg).SetQuestion(name, dns.TypeA)
 	r, err := deps.Exchange(q, addr)
 	if err != nil {
 		return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: Fail,
 			Message: "DNS listener does not answer: " + err.Error(),
 			Fix:     "start serve, or free " + addr + " if something else is using it"}
+	}
+	if len(domains) == 0 {
+		if r.Rcode != dns.RcodeRefused || len(r.Answer) != 0 {
+			return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: Fail,
+				Message: fmt.Sprintf("answers %s %v for %s, which no domain routes, not REFUSED: "+
+					"something other than devingress listens here", dns.RcodeToString[r.Rcode], r.Answer, name),
+				Fix: "free " + addr + ", or set dns_listen in config.toml to a free address"}
+		}
+		return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: OK,
+			Message: "DNS listener answers; it refuses every name until devingress dns setup routes a domain to it"}
 	}
 	if len(r.Answer) != 1 || r.Answer[0].Header().Rrtype != dns.TypeA || !r.Answer[0].(*dns.A).A.IsLoopback() {
 		return Check{Check: "dns", Subject: addr + " (dns_listen)", Status: Fail,
@@ -348,28 +367,10 @@ func dnsFix(host string) string {
 // devingress file in /etc/resolver) routes to the DNS listener nor resolves to loopback some
 // other way.
 func checkDNSRoutes(deps Deps, owners []routefile.Owner) []Check {
-	routed := map[string]string{} // domain -> the devingress file routing it
+	routed := routedDomains(deps)
 	noun, dir := "drop-in", resolved.Dir
 	if deps.GOOS == "darwin" {
 		noun, dir = "resolver file", macresolver.Dir
-		paths, _ := deps.Glob(filepath.Join(macresolver.Dir, "*"))
-		for _, p := range paths {
-			if data, err := deps.ReadFile(p); err == nil && macresolver.Ours(string(data)) {
-				routed[filepath.Base(p)] = p
-			}
-		}
-	} else {
-		paths, _ := deps.Glob(filepath.Join(resolved.Dir, resolved.DropInName("*")))
-		for _, p := range paths {
-			data, err := deps.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			domain := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "devingress-"), ".conf")
-			if resolved.RoutesDomain(string(data), domain) {
-				routed[domain] = p
-			}
-		}
 	}
 
 	seen := map[string]bool{}
@@ -387,6 +388,32 @@ func checkDNSRoutes(deps Deps, owners []routefile.Owner) []Check {
 		}
 	}
 	return out
+}
+
+// routedDomains maps each domain a devingress drop-in (on macOS, a devingress file in
+// /etc/resolver) routes to the DNS listener to that file: the domains serve answers for.
+func routedDomains(deps Deps) map[string]string {
+	routed := map[string]string{}
+	if deps.GOOS == "darwin" {
+		paths, _ := deps.Glob(filepath.Join(macresolver.Dir, "*"))
+		for _, p := range paths {
+			if data, err := deps.ReadFile(p); err == nil && macresolver.Ours(string(data)) {
+				routed[filepath.Base(p)] = p
+			}
+		}
+		return routed
+	}
+	paths, _ := deps.Glob(filepath.Join(resolved.Dir, resolved.DropInName("*")))
+	for _, p := range paths {
+		domain, ok := resolved.DropInDomain(filepath.Base(p))
+		if !ok {
+			continue
+		}
+		if data, err := deps.ReadFile(p); err == nil && resolved.RoutesDomain(string(data), domain) {
+			routed[domain] = p
+		}
+	}
+	return routed
 }
 
 func checkDNSRoute(deps Deps, host string, routed map[string]string, noun, dir string) Check {

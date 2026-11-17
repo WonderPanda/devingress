@@ -148,7 +148,8 @@ the root with `NODE_EXTRA_CA_CERTS=$(devingress trust --path)`.
 
 **DNS:** run `devingress dns setup example.dev` once. `serve` runs a wildcard
 DNS listener (`dns_listen`, default `127.0.0.1:15353`) that answers loopback
-for every name, and `dns setup` routes your dev domain to it through a
+for every name under a domain `dns setup` routed to it (REFUSED for any other
+name), and `dns setup` routes your dev domain to it through a
 systemd-resolved drop-in, asking for `sudo`; `--print` shows the drop-in and the
 commands without running anything. If resolved has global DNS servers (e.g.
 from `omarchy dns`), they are asked first and answer NXDOMAIN, so `setup`
