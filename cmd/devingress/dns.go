@@ -21,7 +21,9 @@ import (
 const dnsHelp = `Route a domain's lookups to serve's DNS listener, so every name under it resolves to loopback
 (A 127.0.0.1, AAAA ::1) with no per-host entries: through systemd-resolved on Linux, through
 /etc/resolver on macOS. Privileges are needed once, here; up and down never touch DNS. serve
-listens on dns_listen in config.toml (default 127.0.0.1:15353; "" turns it off).
+listens on dns_listen in config.toml (default 127.0.0.1:15353; "" turns it off). It answers only
+names under a domain set up here, read from the files below on every query, so a domain set up
+while serve runs needs no restart; it answers every other name REFUSED.
 
 On Linux, setup writes /etc/systemd/resolved.conf.d/devingress-<domain>.conf:
 
