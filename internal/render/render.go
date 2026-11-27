@@ -8,11 +8,13 @@ import (
 	"slices"
 	"strings"
 
+	_ "github.com/caddy-dns/cloudflare" // dns.providers.cloudflare, for remote mode's DNS-01 challenge
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig"
 	_ "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 
+	"github.com/WonderPanda/devingress/internal/remote"
 	"github.com/WonderPanda/devingress/internal/routefile"
 )
 
@@ -23,13 +25,29 @@ type Options struct {
 	Bind        []string
 	HTTPPort    int
 	HTTPSPort   int
+	Remote      *Remote // nil: remote mode is off
+}
+
+// Remote is what remote mode renders from: twins of opted-in sites under Suffix, and the one
+// *.<Suffix> certificate, issued by Let's Encrypt through a Cloudflare DNS-01 challenge with the
+// token in TokenFile (an absolute path; only the path is rendered, never the token).
+type Remote struct {
+	Suffix    string
+	TokenFile string
+}
+
+func (o Options) suffix() string {
+	if o.Remote == nil {
+		return ""
+	}
+	return o.Remote.Suffix
 }
 
 // Caddyfile renders the whole config. Two owners claiming the same host or
 // path prefix is an error here: Caddy would reject the merged config, and
-// with it every other owner's routes.
+// with it every other owner's routes. In remote mode a twin is a host too.
 func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
-	if err := checkConflicts(owners); err != nil {
+	if err := checkConflicts(owners, o.suffix()); err != nil {
 		return "", err
 	}
 	var b strings.Builder
@@ -43,7 +61,14 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	}
 	// No UDP listener is opened, so never advertise h3: Safari caches the
 	// alt-svc and then fails every wss:// upgrade.
-	b.WriteString("\tservers {\n\t\tprotocols h1 h2\n\t}\n")
+	b.WriteString("\tservers {\n\t\tprotocols h1 h2\n")
+	if o.Remote != nil {
+		// Every twin shares the *.<suffix> certificate, so a browser may send a request for one
+		// twin over a connection made for another, skipping the ALPN pin of a protocols = ["h1"]
+		// twin. strict_sni_host answers such a request 421, and the browser reconnects.
+		b.WriteString("\t\tstrict_sni_host on\n")
+	}
+	b.WriteString("\t}\n")
 	if o.CARoot != "" {
 		// mkcert's root is pathlen:0, so it cannot sign an intermediate. It
 		// stands in as Caddy's intermediate too, signing leaves directly.
@@ -61,11 +86,20 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	for _, ow := range owners {
 		fmt.Fprintf(&b, "\n# owner: %s\n", ow.Label())
 		for _, s := range ow.Sites {
-			writeSite(&b, s, ow.Label())
+			writeSite(&b, s, ow.Label(), false)
+		}
+		for _, s := range ow.Sites {
+			if twin, _ := remote.Name(ow, s.Host, o.suffix()); twin != "" {
+				s.Host = twin
+				writeSite(&b, s, ow.Label(), true)
+			}
 		}
 		for _, p := range ow.Paths {
 			paths = append(paths, ownedPath{p, ow.Label()})
 		}
+	}
+	if o.Remote != nil {
+		writeWildcard(&b, *o.Remote)
 	}
 	if len(paths) > 0 {
 		// Longest prefix first so a nested prefix is never shadowed.
@@ -94,10 +128,16 @@ func Caddyfile(o Options, owners []routefile.Owner) (string, error) {
 	return b.String(), nil
 }
 
-func writeSite(b *strings.Builder, s routefile.Site, owner string) {
+// writeSite writes one site block. A remote twin names no issuer: the *.<suffix> site's DNS-01
+// policy covers it, and Caddy serves it the wildcard certificate instead of obtaining its own.
+func writeSite(b *strings.Builder, s routefile.Site, owner string, twin bool) {
 	fmt.Fprintf(b, "%s {\n", s.Host)
 	if len(s.Protocols) > 0 {
-		fmt.Fprintf(b, "\ttls internal {\n\t\talpn %s\n\t}\n", strings.Join(alpn(s.Protocols), " "))
+		issuer := " internal"
+		if twin {
+			issuer = ""
+		}
+		fmt.Fprintf(b, "\ttls%s {\n\t\talpn %s\n\t}\n", issuer, strings.Join(alpn(s.Protocols), " "))
 	}
 	if s.Caddy != "" {
 		b.WriteString(s.Caddy)
@@ -110,6 +150,21 @@ func writeSite(b *strings.Builder, s routefile.Site, owner string) {
 		writeUnreachable(b, "\t\t", s.Upstream, s.Host, owner)
 		b.WriteString("\t}\n")
 	}
+	b.WriteString("}\n")
+}
+
+// writeWildcard writes the *.<suffix> site: it carries the one public certificate every twin is
+// served, from Let's Encrypt through a Cloudflare DNS-01 challenge (never a certificate per
+// host, which Certificate Transparency logs would publish with every branch name), and answers
+// 404 for a name no twin claims. The token reaches Caddy as a {file.*} placeholder, which Caddy
+// reads when it provisions the DNS provider, so neither the Caddyfile nor the JSON holds it.
+func writeWildcard(b *strings.Builder, r Remote) {
+	fmt.Fprintf(b, "\n# remote: every twin is served the *.%s certificate\n", r.Suffix)
+	fmt.Fprintf(b, "*.%s {\n", r.Suffix)
+	fmt.Fprintf(b, "\ttls {\n\t\tdns cloudflare %s\n\t}\n", quotePath("{file."+r.TokenFile+"}"))
+	b.WriteString("\theader Content-Type \"text/plain; charset=utf-8\"\n")
+	b.WriteString("\trespond \"devingress: no remote route is registered for {http.request.host}. " +
+		"Run \\\"devingress status\\\" on this machine.\" 404\n")
 	b.WriteString("}\n")
 }
 
@@ -167,14 +222,27 @@ func alpn(protocols []string) []string {
 	return out
 }
 
-func checkConflicts(owners []routefile.Owner) error {
+func checkConflicts(owners []routefile.Owner, suffix string) error {
 	hosts, prefixes := map[string]string{}, map[string]string{}
+	claim := func(host string, o routefile.Owner) error {
+		if prev, ok := hosts[host]; ok {
+			return fmt.Errorf("host %s is claimed by both %s and %s", host, prev, o.Label())
+		}
+		hosts[host] = o.Label()
+		return nil
+	}
 	for _, o := range owners {
 		for _, s := range o.Sites {
-			if prev, ok := hosts[s.Host]; ok {
-				return fmt.Errorf("host %s is claimed by both %s and %s", s.Host, prev, o.Label())
+			if err := claim(s.Host, o); err != nil {
+				return err
 			}
-			hosts[s.Host] = o.Label()
+		}
+		for _, s := range o.Sites {
+			if twin, _ := remote.Name(o, s.Host, suffix); twin != "" {
+				if err := claim(twin, o); err != nil {
+					return err
+				}
+			}
 		}
 		for _, p := range o.Paths {
 			if prev, ok := prefixes[p.Prefix]; ok {

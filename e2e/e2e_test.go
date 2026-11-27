@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -148,7 +149,7 @@ func TestDoctor(t *testing.T) {
 
 	// The harness's hello-world upstream is listening, so both routes to it probe ok.
 	for _, host := range []string{webHost, h1Host} {
-		subject := fmt.Sprintf("127.0.0.1:%s (%s)", upstreamPort(), host)
+		subject := fmt.Sprintf("localhost:%s (%s)", upstreamPort(), host)
 		if !slices.ContainsFunc(checks, func(c check) bool {
 			return c.Check == "upstream" && c.Subject == subject && c.Status == "ok"
 		}) {
@@ -387,7 +388,7 @@ func TestUnreachableUpstream(t *testing.T) {
 		domain, port, port, port))
 	up(t, srv, dir)
 	host := "web-dead-branch." + domain
-	upstream := fmt.Sprintf("127.0.0.1:%d", port)
+	upstream := fmt.Sprintf("localhost:%d", port)
 
 	for _, c := range []struct {
 		client *http.Client
@@ -419,5 +420,42 @@ func TestUnreachableUpstream(t *testing.T) {
 		if err != nil {
 			t.Errorf("GET %s: %v", c.url, err)
 		}
+	}
+}
+
+// A dev server that listens only on [::1], as Vite does by default, answers through a bare-port
+// route: the upstream is localhost:<port>, so the dial tries ::1 as well as 127.0.0.1.
+func TestIPv6OnlyUpstream(t *testing.T) {
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	v6 := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, "hello from [::1]\n")
+	})}
+	go v6.Serve(ln)
+	defer v6.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	dir := checkout(t, srv, "v6-branch", fmt.Sprintf("domain = %q\n\n[[route]]\nhost = \"web-${slug}\"\nto = \"%d\"\n", domain, port))
+	if out := up(t, srv, dir); !strings.Contains(out, fmt.Sprintf("-> localhost:%d", port)) {
+		t.Errorf("up printed:\n%s", out)
+	}
+	host := "web-v6-branch." + domain
+	client := srv.client(pool(t, filepath.Join(caDir, "rootCA.pem")))
+	err = poll(10*time.Second, func() error {
+		resp, err := client.Get("https://" + host + "/")
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || string(body) != "hello from [::1]\n" {
+			return fmt.Errorf("got %s %q", resp.Status, body)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("GET https://%s/ with the upstream on [::1]:%d only: %v", host, port, err)
 	}
 }

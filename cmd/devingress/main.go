@@ -16,6 +16,7 @@ import (
 	"github.com/WonderPanda/devingress/internal/config"
 	"github.com/WonderPanda/devingress/internal/ingress"
 	"github.com/WonderPanda/devingress/internal/probe"
+	"github.com/WonderPanda/devingress/internal/remote"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
 )
@@ -47,7 +48,7 @@ deleted without "down" is pruned by the next up or down.
 
 Files:
   ~/.config/devingress/config.toml          host settings: bind, http_port, https_port, ca_root,
-                                            dns_listen
+                                            dns_listen, [remote] (see the README's Remote mode)
   $XDG_STATE_HOME/devingress                registered routes (default ~/.local/state/devingress)
   $XDG_RUNTIME_DIR/devingress/admin.sock    admin socket of the running serve
 `
@@ -267,7 +268,9 @@ Reads F, the env files it names and, without --slug, dir's git branch. Takes the
 lock, prunes owners whose directory is gone, and validates every owner's routes together with
 Caddy before writing the state dir. If serve is running, the new config is loaded through the
 admin socket; if not, the routes are saved and apply when serve starts. A rejected change leaves
-every registered route as it was. Prints each URL it registered.
+every registered route as it was. Prints each URL it registered. In remote mode (a [remote]
+section in config.toml) and with remote = true in the route file, each site's line also shows
+its remote URL, https://<host>.<suffix>, and a warning names each host that gets none, and why.
 See "devingress help routefile" for the route file format.
 
 Exit codes:
@@ -294,6 +297,10 @@ func up(args []string, stdout io.Writer) error {
 	if err := checkName(*name); err != nil {
 		return err
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
 	owner, err := routefile.Load(dir, *file, *slug)
 	if err != nil {
 		return err
@@ -307,8 +314,19 @@ func up(args []string, stdout io.Writer) error {
 		return err
 	}
 	report(stdout, res)
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(stdout, "  warning: %s\n", w)
+	}
+	var skipped []string
 	for _, s := range owner.Sites {
-		fmt.Fprintf(stdout, "  https://%s -> %s\n", s.Host, s.Upstream)
+		twin, skip := remote.Name(owner, s.Host, cfg.Suffix())
+		fmt.Fprintf(stdout, "  https://%s -> %s%s\n", s.Host, s.Upstream, remoteNote(twin))
+		if skip != "" {
+			skipped = append(skipped, fmt.Sprintf("  warning: %s gets no remote URL: %s\n", s.Host, skip))
+		}
+	}
+	for _, w := range skipped {
+		fmt.Fprint(stdout, w)
 	}
 	for _, p := range owner.Paths {
 		fmt.Fprintf(stdout, "  http://<host>%s/* -> %s\n", p.Prefix, p.Upstream)
@@ -377,6 +395,15 @@ func down(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// remoteNote is "  (remote https://<twin>)", or "" for a site without a twin. Tailscale forwards
+// the tailnet's :443, so the remote URL never carries a port.
+func remoteNote(twin string) string {
+	if twin == "" {
+		return ""
+	}
+	return "  (remote https://" + twin + ")"
+}
+
 func report(stdout io.Writer, res ingress.Result) {
 	for _, o := range res.Pruned {
 		fmt.Fprintf(stdout, "  pruned %s (directory is gone)\n", o.Label())
@@ -388,7 +415,8 @@ func report(stdout io.Writer, res ingress.Result) {
 
 const statusHelp = `Print whether serve is running, then each registered owner: its directory, route file, slug
 and URLs. An owner whose directory no longer exists is marked "[gone; pruned on next up/down]".
-For output a program can parse, use "devingress routes --json".
+For output a program can parse, use "devingress routes --json". In remote mode, a site with a
+remote twin shows its remote URL after the upstream.
 
 Each URL line starts with a marker from a TCP dial to its upstream, made now, in parallel, with a
 300ms timeout: up (something accepts connections), down (nothing listens; the URL 502s) or unknown
@@ -396,8 +424,9 @@ Each URL line starts with a marker from a TCP dial to its upstream, made now, in
 marker is a dot, green for up, red for down and grey for unknown; when stdout is not a terminal,
 or NO_COLOR is set, it is the word up, down or ?.
 
-Reads the state dir, checks whether the admin socket accepts connections and dials every
-upstream. Changes nothing, and works whether or not serve is running.
+Reads the state dir and config.toml (a config.toml that does not load is reported, and remote
+URLs are left out), checks whether the admin socket accepts connections and dials every upstream.
+Changes nothing, and works whether or not serve is running.
 
 Exit codes:
   0  printed, whatever the upstreams' state
@@ -416,10 +445,14 @@ func status(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	cfg, cfgErr := config.Load()
 	if ingress.Running() {
 		fmt.Fprintf(stdout, "serving (admin %s)\n", config.AdminSocket())
 	} else {
 		fmt.Fprintln(stdout, "not serving")
+	}
+	if cfgErr != nil {
+		fmt.Fprintf(stdout, "warning: %v\n", cfgErr)
 	}
 	var upstreams []string
 	for _, o := range owners {
@@ -442,7 +475,8 @@ func status(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "\n%s  (%s, slug %s)%s\n", o.Label(), o.File, o.Slug, gone)
 		for _, s := range o.Sites {
-			fmt.Fprintf(stdout, "  %s  https://%s -> %s\n", mark(results[s.Upstream]), s.Host, s.Upstream)
+			twin, _ := remote.Name(o, s.Host, cfg.Suffix())
+			fmt.Fprintf(stdout, "  %s  https://%s -> %s%s\n", mark(results[s.Upstream]), s.Host, s.Upstream, remoteNote(twin))
 		}
 		for _, p := range o.Paths {
 			fmt.Fprintf(stdout, "  %s  http://<host>%s/* -> %s\n", mark(results[p.Upstream]), p.Prefix, p.Upstream)

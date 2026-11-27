@@ -1,0 +1,25 @@
+domain = "example.dev"
+
+[[route]]
+host = "web-${slug}"
+to = "10299"
+retry = "5s"
+
+[[route]]
+host = "realtime-${slug}"
+to = "10300"
+protocols = ["h1"]
+caddy = '''
+header Access-Control-Allow-Origin "{http.request.header.Origin}"
+reverse_proxy ${upstream}
+'''
+
+[[route]]
+host = "api-${slug}"
+to = "http://127.0.0.1:10301"
+proxy = 'header_up X-Forwarded-Proto https'
+
+[[path]]
+prefix = "/auth-${slug}"
+to = "10302"
+strip = true

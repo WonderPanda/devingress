@@ -28,7 +28,10 @@ the route file format.
   :80/:443 on macOS (wildcard address, socket bound to lo0). `config.Render` routes loopback bind
   addresses through it on darwin.
 - `internal/config/`: host settings (`~/.config/devingress/config.toml`: `bind`, `http_port`,
-  `https_port`, `ca_root`, `dns_listen`) and the XDG paths.
+  `https_port`, `ca_root`, `dns_listen`, `[remote]`) and the XDG paths.
+- `internal/remote/`: remote mode: the twin name of each site of a `remote = true` route file, the
+  tailnet address (`tailscale0`, or `utun*` on macOS), the Cloudflare token file (format checked,
+  never printed) and the updater serve runs to keep the `*.<suffix>` A record on that address.
 - `internal/probe/`: dials route upstreams in parallel (up, down or unknown) for `status` and
   `doctor`.
 - `internal/doctor/`: the read-only checks behind `devingress doctor`, each one a function taking
@@ -73,6 +76,10 @@ Before opening a PR, `go build ./...`, `go test ./...`, `go test -tags e2e ./e2e
 - Never run `devingress dns setup` or `remove` without `--print`: they run `sudo` and `systemctl`
   and write `/etc/systemd/resolved.conf.d/` (`/etc/resolver/` and `killall` on macOS). Never run a
   `resolvectl` subcommand that changes state.
+- Never run a `tailscale` command that changes state (`serve`, `set`, `up`, `down`), read or
+  print a real Cloudflare token (`~/.config/devingress/cloudflare-token`), or call the Cloudflare
+  API or an ACME CA. Tests use fake tokens in `t.TempDir()`, a fake Cloudflare API and
+  `tailscale serve status --json` fixtures.
 - Never run `launchctl`, `security` or `killall`. Tests replace every function that would, and
   write nothing outside `t.TempDir()`. The darwin-only code (`_darwin.go`) is checked by
   `GOOS=darwin go vet ./...` and the CI `macos` job.

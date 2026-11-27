@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/WonderPanda/devingress/internal/config"
 	"github.com/WonderPanda/devingress/internal/localdns"
+	"github.com/WonderPanda/devingress/internal/remote"
 	"github.com/WonderPanda/devingress/internal/render"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
@@ -69,7 +71,7 @@ func Reconcile(mutate func([]routefile.Owner) []routefile.Owner) (Result, error)
 	res.config = cfgJSON
 	if Running() {
 		if err := load(cfgJSON); err != nil {
-			return Result{}, fmt.Errorf("server rejected the config: %w", err)
+			return Result{}, fmt.Errorf("server rejected the config: %w", cfg.Redact(err))
 		}
 		res.Applied = true
 	}
@@ -97,7 +99,8 @@ func build(cfg config.Config, owners []routefile.Owner) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return render.Adapt(text)
+	cfgJSON, err := render.Adapt(text)
+	return cfgJSON, cfg.Redact(err)
 }
 
 // Caddyfile renders the current state without changing anything.
@@ -117,11 +120,15 @@ func Caddyfile() (string, error) {
 // them into a running server. With no ca_root, provisioning creates Caddy's
 // root in config.CaddyDir if it is not there yet.
 func Provision() error {
-	text, err := Caddyfile()
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	_, err = render.Adapt(text)
+	owners, err := state.New(config.StateDir()).List()
+	if err != nil {
+		return err
+	}
+	_, err = build(cfg, owners)
 	return err
 }
 
@@ -163,8 +170,9 @@ func load(cfgJSON []byte) error {
 	return nil
 }
 
-// Serve runs Caddy with every live owner's routes, and the DNS listener when dns_listen is set,
-// until SIGINT/SIGTERM.
+// Serve runs Caddy with every live owner's routes, the DNS listener when dns_listen is set, and in
+// remote mode the updater that keeps *.<suffix> pointed at the tailnet address, until
+// SIGINT/SIGTERM.
 func Serve() error {
 	if Running() {
 		return fmt.Errorf("devingress is already serving on %s", config.AdminSocket())
@@ -172,6 +180,10 @@ func Serve() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	logger := log.New(os.Stderr, "devingress: ", log.LstdFlags)
+	for _, w := range cfg.Warnings {
+		logger.Printf("warning: %s", w)
 	}
 	if err := checkSocketPath(config.AdminSocket(), runtime.GOOS); err != nil {
 		return err
@@ -196,10 +208,20 @@ func Serve() error {
 		return err
 	}
 	if err := caddy.Load(res.config, true); err != nil {
-		return err
+		return cfg.Redact(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if cfg.Remote != nil {
+		u := &remote.Updater{
+			Suffix:     cfg.Remote.Suffix,
+			TokenFile:  cfg.Remote.TokenFile,
+			Interfaces: remote.Interfaces,
+			GOOS:       runtime.GOOS,
+			Logf:       func(format string, args ...any) { logger.Printf("remote: "+format, args...) },
+		}
+		go u.Run(ctx)
+	}
 	<-ctx.Done()
 	return caddy.Stop()
 }

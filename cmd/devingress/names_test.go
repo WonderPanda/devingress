@@ -87,7 +87,7 @@ func TestNamedOwnersCoexist(t *testing.T) {
 		!strings.Contains(status, "\n"+dir+"  (devingress.toml, slug x)\n") {
 		t.Errorf("status:\n%s", status)
 	}
-	want := []string{dir, "  https://main.example.dev  127.0.0.1:3000", "", dir + " [coding]", "  https://coding.example.dev  127.0.0.1:3000"}
+	want := []string{dir, "  https://main.example.dev  localhost:3000", "", dir + " [coding]", "  https://coding.example.dev  localhost:3000"}
 	if got := routesText(t); !slices.Equal(got, want) {
 		t.Errorf("routes:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}

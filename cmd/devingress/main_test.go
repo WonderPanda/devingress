@@ -260,6 +260,7 @@ type jsonRoute struct {
 	File      string    `json:"file"`
 	Slug      string    `json:"slug"`
 	Gone      *bool     `json:"gone"`
+	RemoteURL *string   `json:"remote_url"`
 	Caddy     *string   `json:"caddy"`
 	Proxy     *string   `json:"proxy"`
 }
