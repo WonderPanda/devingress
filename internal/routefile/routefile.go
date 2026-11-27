@@ -18,6 +18,7 @@ const DefaultName = "devingress.toml"
 
 type file struct {
 	Domain string      `toml:"domain"`
+	Remote bool        `toml:"remote"`
 	Env    []string    `toml:"env"`
 	Routes []fileRoute `toml:"route"`
 	Paths  []filePath  `toml:"path"`
@@ -62,14 +63,17 @@ type PathRoute struct {
 
 // Owner is one route set a directory contributes, identified by (Dir, Name).
 // Name "" is the directory's unnamed owner. Its routes live exactly as long
-// as Dir exists.
+// as Dir exists. Domain and Remote are the route file's: a machine in remote
+// mode gives each site of a Remote owner a twin under its suffix.
 type Owner struct {
-	Dir   string      `json:"dir"`
-	Name  string      `json:"name,omitempty"`
-	File  string      `json:"file"`
-	Slug  string      `json:"slug"`
-	Sites []Site      `json:"sites"`
-	Paths []PathRoute `json:"paths"`
+	Dir    string      `json:"dir"`
+	Name   string      `json:"name,omitempty"`
+	File   string      `json:"file"`
+	Slug   string      `json:"slug"`
+	Domain string      `json:"domain,omitempty"`
+	Remote bool        `json:"remote,omitempty"`
+	Sites  []Site      `json:"sites"`
+	Paths  []PathRoute `json:"paths"`
 }
 
 // Label is Dir, or "Dir [Name]" for a named owner.
@@ -101,7 +105,7 @@ func Load(dir, name, slug string) (Owner, error) {
 		}
 	}
 	r := resolver{slug: slug, vars: vars}
-	o := Owner{Dir: dir, File: name, Slug: slug}
+	o := Owner{Dir: dir, File: name, Slug: slug, Domain: f.Domain, Remote: f.Remote}
 
 	for i, fr := range f.Routes {
 		at := fmt.Sprintf("%s: route[%d]", path, i)

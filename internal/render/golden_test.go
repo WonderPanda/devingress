@@ -63,3 +63,26 @@ func TestGoldenLocalOnly(t *testing.T) {
 	}
 	golden(t, "local.Caddyfile", text)
 }
+
+const goldenSuffix = "machine.example.dev"
+
+// remoteOwners is goldenOwners opted in with remote = true, plus an owner that is not opted in
+// and one whose host needs two labels under the suffix.
+func remoteOwners(t *testing.T) []routefile.Owner {
+	owners := goldenOwners(t)
+	owners[0].Remote = true
+	return append(owners,
+		routefile.Owner{Dir: "/src/docs", Domain: "example.dev", Sites: []routefile.Site{{Host: "docs.example.dev", Upstream: "localhost:4000"}}},
+		routefile.Owner{Dir: "/src/deep", Domain: "example.dev", Remote: true, Sites: []routefile.Site{{Host: "a.b.example.dev", Upstream: "localhost:4001"}}},
+	)
+}
+
+func TestGoldenRemote(t *testing.T) {
+	o := goldenOptions()
+	o.Remote = &Remote{Suffix: goldenSuffix, TokenFile: "/home/me/.config/devingress/cloudflare-token"}
+	text, err := Caddyfile(o, remoteOwners(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "remote.Caddyfile", text)
+}

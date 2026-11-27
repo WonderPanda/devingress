@@ -13,6 +13,14 @@ Top-level keys:
 
   domain      string, default "" (hosts are used as written)
               Appended to every [[route]] host as ".<domain>".
+  remote      boolean, default false
+              Also serve this file's [[route]] hosts to other devices on the tailnet, on a machine
+              whose config.toml has a [remote] section (see "Remote mode" in the README). Each
+              <host>.<domain> gets a twin, <host>.<suffix>, with the same upstream and settings,
+              under the machine's one public wildcard certificate for *.<suffix>. The twin needs
+              domain set and <host> to be one DNS label (no dots, at most 63 characters); "up"
+              warns about each host that gets none. [[path]] routes are never remote. Ignored on a
+              machine without [remote].
   env         array of strings, default []
               Env files to read ${VARS} from: absolute, or relative to the checkout (even when the
               route file lives elsewhere). Each line is KEY=VALUE; blank lines, "#" comments and

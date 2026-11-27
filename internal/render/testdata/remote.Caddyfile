@@ -1,0 +1,118 @@
+{
+	admin "unix//run/user/1000/devingress/admin.sock"
+	storage file_system "/home/me/.local/share/devingress/caddy"
+	local_certs
+	skip_install_trust
+	http_port 80
+	https_port 443
+	default_bind 127.0.0.1 172.17.0.1
+	servers {
+		protocols h1 h2
+		strict_sni_host on
+	}
+	pki {
+		ca local {
+			root {
+				cert "/home/me/.local/share/mkcert/rootCA.pem"
+				key "/home/me/.local/share/mkcert/rootCA-key.pem"
+			}
+			intermediate {
+				cert "/home/me/.local/share/mkcert/rootCA.pem"
+				key "/home/me/.local/share/mkcert/rootCA-key.pem"
+			}
+		}
+	}
+}
+
+# owner: /src/app
+web-my-branch.example.dev {
+	reverse_proxy localhost:10299 {
+		lb_try_duration 5s
+		lb_try_interval 250ms
+	}
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "devingress: nothing answered at localhost:10299 for web-my-branch.example.dev (owner /src/app). Start its dev server, or run \"devingress status\"." {err.status_code}
+	}
+}
+realtime-my-branch.example.dev {
+	tls internal {
+		alpn http/1.1
+	}
+header Access-Control-Allow-Origin "{http.request.header.Origin}"
+reverse_proxy localhost:10300
+}
+api-my-branch.example.dev {
+	reverse_proxy http://127.0.0.1:10301 {
+		header_up X-Forwarded-Proto https
+	}
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "devingress: nothing answered at http://127.0.0.1:10301 for api-my-branch.example.dev (owner /src/app). Start its dev server, or run \"devingress status\"." {err.status_code}
+	}
+}
+web-my-branch.machine.example.dev {
+	reverse_proxy localhost:10299 {
+		lb_try_duration 5s
+		lb_try_interval 250ms
+	}
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "devingress: nothing answered at localhost:10299 for web-my-branch.machine.example.dev (owner /src/app). Start its dev server, or run \"devingress status\"." {err.status_code}
+	}
+}
+realtime-my-branch.machine.example.dev {
+	tls {
+		alpn http/1.1
+	}
+header Access-Control-Allow-Origin "{http.request.header.Origin}"
+reverse_proxy localhost:10300
+}
+api-my-branch.machine.example.dev {
+	reverse_proxy http://127.0.0.1:10301 {
+		header_up X-Forwarded-Proto https
+	}
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "devingress: nothing answered at http://127.0.0.1:10301 for api-my-branch.machine.example.dev (owner /src/app). Start its dev server, or run \"devingress status\"." {err.status_code}
+	}
+}
+
+# owner: /src/docs
+docs.example.dev {
+	reverse_proxy localhost:4000
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "devingress: nothing answered at localhost:4000 for docs.example.dev (owner /src/docs). Start its dev server, or run \"devingress status\"." {err.status_code}
+	}
+}
+
+# owner: /src/deep
+a.b.example.dev {
+	reverse_proxy localhost:4001
+	handle_errors 502 503 504 {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "devingress: nothing answered at localhost:4001 for a.b.example.dev (owner /src/deep). Start its dev server, or run \"devingress status\"." {err.status_code}
+	}
+}
+
+# remote: every twin is served the *.machine.example.dev certificate
+*.machine.example.dev {
+	tls {
+		dns cloudflare "{file./home/me/.config/devingress/cloudflare-token}"
+	}
+	header Content-Type "text/plain; charset=utf-8"
+	respond "devingress: no remote route is registered for {http.request.host}. Run \"devingress status\" on this machine." 404
+}
+
+http://:80 {
+	handle_path /auth-my-branch/* {
+		reverse_proxy localhost:10302
+	}
+	handle_errors 502 503 504 {
+		handle /auth-my-branch/* {
+			header Content-Type "text/plain; charset=utf-8"
+			respond "devingress: nothing answered at localhost:10302 for /auth-my-branch/* (owner /src/app). Start its dev server, or run \"devingress status\"." {err.status_code}
+		}
+	}
+}

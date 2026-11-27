@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/WonderPanda/devingress/internal/config"
+	"github.com/WonderPanda/devingress/internal/remote"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/state"
 )
@@ -20,8 +21,9 @@ const routesHelp = `List registered routes, grouped by owner: one block per owne
 name, with a blank line between blocks. Each block starts with the directory (your home shortened
 to ~), then " [N]" for a set registered with "up --name N", then "[gone]" when the directory no
 longer exists (it is pruned on the next up or down). Under it, indented, one route per line, URL
-then upstream: sites sorted by host, then path routes sorted by prefix. --json prints a flat array
-instead, in the order documented below.
+then upstream, then, in remote mode, the site's remote URL when it has one: sites sorted by host,
+then path routes sorted by prefix. --json prints a flat array instead, in the order documented
+below.
 
 Flags:
   --dir D     only routes owned by D, every named set included, resolved as up resolves dir
@@ -35,13 +37,15 @@ URLs to answer.
 
 JSON fields, always present except name, which appears only for a named owner:
   site  {"kind": "site", "url", "host", "upstream", "retry", "protocols", "dir", "name", "file",
-         "slug", "gone"}
+         "slug", "gone", "remote_url"}
   path  {"kind": "path", "prefix", "upstream", "strip", "dir", "name", "file", "slug", "gone"}
   url is ready to use: "https://<host>", plus ":<https_port>" when config.toml sets one other
   than 443. retry is "" when unset, protocols a list ([] for the default h1 and h2), strip and
   gone booleans. dir is the owner's absolute directory, name its "up --name", file its route
-  file and slug its ${slug}. Sites come first, sorted by host then dir then name, then path
-  routes, sorted by prefix then dir then name. No match prints [].
+  file and slug its ${slug}. remote_url is "https://<label>.<suffix>", the site's twin on the
+  tailnet, when config.toml has [remote] and its route file sets remote = true, else "". Sites
+  come first, sorted by host then dir then name, then path routes, sorted by prefix then dir
+  then name. No match prints [].
 
 Exit codes:
   0  printed; with no filter, an empty registry prints nothing (or [])
@@ -66,6 +70,7 @@ type siteRoute struct {
 	File      string   `json:"file"`
 	Slug      string   `json:"slug"`
 	Gone      bool     `json:"gone"`
+	RemoteURL string   `json:"remote_url"`
 }
 
 type pathRoute struct {
@@ -129,8 +134,13 @@ func routes(args []string, stdout io.Writer) error {
 			if *host != "" && s.Host != *host {
 				continue
 			}
+			remoteURL := ""
+			if twin, _ := remote.Name(o, s.Host, cfg.Suffix()); twin != "" {
+				remoteURL = "https://" + twin
+			}
 			g.sites = append(g.sites, siteRoute{Kind: "site", URL: siteURL(s.Host, cfg.HTTPSPort), Host: s.Host, Upstream: s.Upstream,
-				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, Name: o.Name, File: o.File, Slug: o.Slug, Gone: g.gone})
+				Retry: s.Retry, Protocols: append([]string{}, s.Protocols...), Dir: o.Dir, Name: o.Name, File: o.File, Slug: o.Slug,
+				Gone: g.gone, RemoteURL: remoteURL})
 		}
 		if *host == "" { // --host selects a site; path routes have no host
 			for _, p := range o.Paths {
@@ -179,6 +189,10 @@ func routes(args []string, stdout io.Writer) error {
 			slices.SortFunc(g.sites, func(a, b siteRoute) int { return cmp.Compare(a.Host, b.Host) })
 			slices.SortFunc(g.paths, func(a, b pathRoute) int { return cmp.Compare(a.Prefix, b.Prefix) })
 			for _, s := range g.sites {
+				if s.RemoteURL != "" {
+					fmt.Fprintf(tw, "  %s\t%s\t%s\n", s.URL, s.Upstream, s.RemoteURL)
+					continue
+				}
 				fmt.Fprintf(tw, "  %s\t%s\n", s.URL, s.Upstream)
 			}
 			for _, p := range g.paths {
