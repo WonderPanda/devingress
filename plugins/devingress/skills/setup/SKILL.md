@@ -62,7 +62,8 @@ or the root CA is missing, tell the user to run `devingress dns setup <domain>` 
 
    Look up the rest in `devingress help routefile` only when the project needs it: `when` for
    optional services, `protocols` for HTTP/1.1-only hosts, `caddy`/`proxy` for CORS, header and
-   rewrite rules, `[[path]]` for containers that call `host.docker.internal`.
+   rewrite rules, `[[path]]` for containers that call `host.docker.internal`, and `remote = true`
+   when the user wants the routes on other devices of their tailnet (a phone, another machine).
 7. **Register and verify**: run `devingress up` from the checkout. It prints every URL it
    registered: check each expected host is there. Then `devingress status`: each URL is marked up
    or down, and down means nothing listens on the upstream yet, so start the dev server. When a
@@ -101,3 +102,9 @@ or the root CA is missing, tell the user to run `devingress dns setup <domain>` 
 - Node.js ignores the system trust store: server-side calls to the https URLs need
   `NODE_EXTRA_CA_CERTS=$(devingress trust --path)` (`--path` only prints the root CA's path).
 - Caddy's own `{placeholder}` syntax passes through untouched; only `${...}` is devingress's.
+- `remote = true` gives each `[[route]]` host a twin, `<host>.<suffix>`, only on a machine whose
+  `config.toml` has `[remote]` (the user's setup: a Cloudflare token and `tailscale serve`; never
+  run `tailscale serve` or touch the token). Each host must be one DNS label (`web-${slug}`, not
+  `web.${slug}`) and `domain` must be set: `up` prints the remote URLs and warns about each host
+  that gets none. Dev servers that check `Host` must allow the twin: for Vite,
+  `server.allowedHosts: [".<suffix>"]`.

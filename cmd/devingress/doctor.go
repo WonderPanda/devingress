@@ -17,11 +17,20 @@ or an /etc/resolver file on macOS), every registered upstream (warn when nothing
 (when installed) the systemd unit or LaunchAgent. Prints one line per check: ok, warn or fail,
 the subject, and for anything not ok a fix. Warnings don't affect the exit code.
 
+In remote mode (a [remote] section in config.toml) it also checks: that Tailscale forwards the
+tailnet's port 443 as raw TCP to 127.0.0.1:<https_port>; the tailnet address (one 100.64.0.0/10
+address on tailscale0, or a utun interface on macOS); that a random name under the suffix
+resolves to it; that serve, on loopback and then through the tailnet address, presents a
+*.<suffix> certificate the system roots trust (warn within 14 days of expiry); that Cloudflare
+reports the token active (warn within 30 days of its expiry; the token is never printed); and
+each host of a remote = true route file that gets no remote URL.
+
 Flags:
   --json    print a JSON array of {"check","subject","status","message","fix"} instead
 
 Strictly read-only: never writes state or config, never loads config into a running serve, never
-runs sudo, systemctl, launchctl or any other external command.
+runs sudo, systemctl, launchctl or any other external command, except "tailscale serve status
+--json" in remote mode (the CLI on PATH, else inside /Applications/Tailscale.app on macOS).
 
 Exit codes:
   0  printed; no check failed (warnings are fine)

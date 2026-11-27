@@ -240,6 +240,93 @@ Caddy's own `{placeholder}` syntax passes through untouched.
 `devingress help routefile` prints the full `devingress.toml` reference, and
 `devingress help <command>` each command's flags, files and exit codes.
 
+### Remote mode
+
+Other devices on your [tailnet](https://tailscale.com) (a phone testing a PWA's
+manifest and service worker, another laptop) can't reach loopback, and wouldn't
+trust devingress's local CA if they could. Remote mode serves the routes you
+opt in to the tailnet too, under one publicly trusted wildcard certificate. It
+is off on a machine without a `[remote]` section in `config.toml`, and works on
+Linux and macOS.
+
+A route file opts in with `remote = true`. Each of its `[[route]]` hosts gets a
+twin with `.<domain>` replaced by `.<suffix>`, with the same upstream, retry,
+proxy, `caddy` body and protocols; `[[path]]` routes never do:
+
+```toml
+domain = "example.dev"
+remote = true
+
+[[route]]
+host = "web-${slug}"   # https://web-my-branch.example.dev on this machine,
+to = "${WEB_PORT}"     # https://web-my-branch.machine.example.dev on the tailnet
+```
+
+The wildcard certificate covers one label, so a host must be one DNS label
+(no dots, at most 63 characters) and the file must set `domain`; `up` warns
+about each host that gets no twin, and why. `up`, `status` and `routes` show
+each twin's URL; `routes --json` has it as `remote_url`.
+
+One-time setup, on each machine:
+
+1. **A Cloudflare API token** for the zone that holds your suffix, with
+   **DNS:Edit and Zone:Read** on it (Zone:Read lets the DNS module look up the
+   zone's ID). Save it, and nothing else, to a file only you can read:
+
+   ```sh
+   install -m 600 /dev/null ~/.config/devingress/cloudflare-token
+   $EDITOR ~/.config/devingress/cloudflare-token
+   ```
+
+   The token file is per machine: copy it by hand to each machine that sets
+   `[remote]`. devingress never prints it, and `config.toml` holds only its
+   path.
+2. **`config.toml`:**
+
+   ```toml
+   [remote]
+   suffix = "machine.example.dev"                         # remote hosts are <label>.<suffix>
+   dns_provider = "cloudflare"                            # the only accepted value
+   token_file = "~/.config/devingress/cloudflare-token"   # a path, never the token itself
+   ```
+
+   Use a suffix per machine, so each machine has its own wildcard record and
+   certificate.
+3. **Forward the tailnet's port 443 to serve**, once:
+
+   ```sh
+   tailscale serve --bg --tcp 443 tcp://127.0.0.1:443   # the target port is https_port
+   ```
+
+   On Linux this needs `sudo`, or run `sudo tailscale set --operator=$USER`
+   once first; the macOS app needs no `sudo`. `--bg` keeps the forward across
+   reboots. It claims the node's tailnet port 443, so Tailscale's own HTTPS
+   serve and Funnel can't use 443 on that machine. devingress never runs
+   `tailscale serve` itself.
+4. **Restart serve** (`sudo systemctl restart devingress`, or
+   `launchctl kickstart -k gui/$(id -u)/com.github.wonderpanda.devingress`),
+   then run `devingress up` in a checkout with `remote = true` and check
+   everything with `devingress doctor`.
+
+serve then obtains `*.<suffix>` from Let's Encrypt through a Cloudflare DNS-01
+challenge, about 10 seconds. It never asks for a certificate per host:
+Certificate Transparency logs would publish every branch name. It also keeps
+the `*.<suffix>` A record (DNS-only, not proxied) pointed at the machine's
+tailnet IPv4, at start and whenever that address changes, and touches no other
+record. Tailscale forwards raw TCP, so devingress terminates TLS on its
+existing loopback listener; `bind`, the systemd unit and the LaunchAgent stay
+as they are.
+
+Every remote request reaches Caddy from `127.0.0.1`, so a route's raw `caddy`
+body cannot tell remote clients apart by IP (`remote_ip`, `client_ip`).
+
+Dev servers that check the `Host` header reject the twin's name until told
+about it. For Vite, add the suffix to `server.allowedHosts`
+(`allowedHosts: [".machine.example.dev"]`), or set
+`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.machine.example.dev` in its
+environment. Vite listens only on `[::1]` by default, which is why a bare-port
+`to` means `localhost:<port>`: the dial tries `127.0.0.1` and `::1`.
+
 ## Coding agents
 
 This repo is also a plugin for Claude Code and Codex. Its `/devingress:setup`
@@ -268,8 +355,12 @@ over HTTPS, which needs a git credential helper.
   two checkouts claiming the same host, fails that command while everyone
   else's routes keep serving.
 - Calls are serialized with a file lock, so parallel worktree hooks are safe.
-- Each host gets its own certificate, so pinning one host to HTTP/1.1 can't
-  affect connections to the others.
+- Each local host gets its own certificate, so pinning one host to HTTP/1.1
+  can't affect connections to the others. Remote twins share the `*.<suffix>`
+  certificate, so a browser may send a request for one twin over another
+  twin's HTTP/2 connection; in remote mode serve answers such a request (Host
+  differs from the connection's TLS SNI) with 421 Misdirected Request, and the
+  browser retries on a new connection that negotiates the pinned protocol.
 - An unreachable upstream answers 502 (504 on a timeout) with a plain-text body
   naming the upstream and the checkout that owns the route. A raw `caddy` body
   keeps whatever error handling it writes.
@@ -285,6 +376,11 @@ http_port = 80
 https_port = 443
 ca_root = "/path/to/ca"              # default: mkcert's CAROOT
 dns_listen = "127.0.0.1:15353"       # serve's DNS listener; "" turns it off
+
+[remote]                             # optional: see Remote mode
+suffix = "machine.example.dev"
+dns_provider = "cloudflare"
+token_file = "~/.config/devingress/cloudflare-token"
 ```
 
 `devingress caddyfile` prints the generated Caddy config.

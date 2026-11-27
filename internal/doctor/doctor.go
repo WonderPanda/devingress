@@ -1,7 +1,7 @@
 // Package doctor diagnoses why a devingress URL does not load. Every check is
 // read-only: it may dial serve and the registered upstreams, but it never
-// writes state or config, never loads config into a running serve, and never
-// runs an external command.
+// writes state or config, never loads config into a running serve, and runs
+// no external command except, in remote mode, "tailscale serve status --json".
 package doctor
 
 import (
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,6 +26,7 @@ import (
 	"github.com/WonderPanda/devingress/internal/launchd"
 	"github.com/WonderPanda/devingress/internal/macresolver"
 	"github.com/WonderPanda/devingress/internal/probe"
+	"github.com/WonderPanda/devingress/internal/remote"
 	"github.com/WonderPanda/devingress/internal/resolved"
 	"github.com/WonderPanda/devingress/internal/routefile"
 	"github.com/WonderPanda/devingress/internal/service"
@@ -51,10 +53,7 @@ type Check struct {
 
 // Iface is one network interface's name and addresses, enough to decide
 // whether a bind address exists on this machine.
-type Iface struct {
-	Name  string
-	Addrs []net.IP
-}
+type Iface = remote.Iface
 
 // Deps are the dependencies each check reaches outward through, so every
 // pass and fail path is unit-testable without a network or root.
@@ -69,6 +68,12 @@ type Deps struct {
 	Exchange   func(m *dns.Msg, addr string) (*dns.Msg, error)
 	Glob       func(pattern string) ([]string, error)
 	GOOS       string // "darwin" checks /etc/resolver and the LaunchAgent; anything else, resolved and systemd
+
+	// Remote mode only.
+	TailscaleServeStatus func() ([]byte, error) // "tailscale serve status --json"; ErrNoTailscale without the CLI
+	HTTPDo               func(*http.Request) (*http.Response, error)
+	Now                  func() time.Time
+	Label                func() string // a random DNS label, for names no route claims
 }
 
 // DefaultDeps reach the real network, filesystem and this machine's
@@ -85,7 +90,7 @@ func DefaultDeps() Deps {
 			return tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, network, address, conf)
 		},
 		CertPool:   x509.SystemCertPool,
-		Interfaces: interfaces,
+		Interfaces: remote.Interfaces,
 		ReadFile:   os.ReadFile,
 		Executable: func() (string, error) {
 			exe, err := os.Executable()
@@ -98,31 +103,13 @@ func DefaultDeps() Deps {
 			r, _, err := (&dns.Client{Timeout: 2 * time.Second}).Exchange(m, addr)
 			return r, err
 		},
-		Glob: filepath.Glob,
-		GOOS: runtime.GOOS,
+		Glob:                 filepath.Glob,
+		GOOS:                 runtime.GOOS,
+		TailscaleServeStatus: func() ([]byte, error) { return tailscaleServeStatus(runtime.GOOS) },
+		HTTPDo:               (&http.Client{Timeout: 10 * time.Second}).Do,
+		Now:                  time.Now,
+		Label:                randomLabel,
 	}
-}
-
-func interfaces() ([]Iface, error) {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Iface, 0, len(ifs))
-	for _, ifc := range ifs {
-		addrs, err := ifc.Addrs()
-		if err != nil {
-			continue
-		}
-		var ips []net.IP
-		for _, a := range addrs {
-			if ipNet, ok := a.(*net.IPNet); ok {
-				ips = append(ips, ipNet.IP)
-			}
-		}
-		out = append(out, Iface{Name: ifc.Name, Addrs: ips})
-	}
-	return out, nil
 }
 
 // Run executes every check and returns them in table order, never nil. A
@@ -159,6 +146,9 @@ func Run(deps Deps) []Check {
 		checks = append(checks, checkHosts(deps, owners, cfg.HTTPSPort, rootPath)...)
 		checks = append(checks, checkDNSRoutes(deps, owners)...)
 		checks = append(checks, checkUpstreams(deps, owners)...)
+	}
+	if cfg.Remote != nil {
+		checks = append(checks, checkRemote(deps, cfg, owners)...)
 	}
 
 	checks = append(checks, checkService(deps)...)
