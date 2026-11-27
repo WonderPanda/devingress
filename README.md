@@ -4,9 +4,9 @@ Stable HTTPS URLs for every local dev server, across every project and git
 worktree on your machine.
 
 ```
-https://web-my-branch.example.dev     -> 127.0.0.1:10299
-https://api-my-branch.example.dev     -> 127.0.0.1:10298
-https://web-other-branch.example.dev  -> 127.0.0.1:11420
+https://web-my-branch.example.dev     -> localhost:10299
+https://api-my-branch.example.dev     -> localhost:10298
+https://web-other-branch.example.dev  -> localhost:11420
 ```
 
 One process owns ports 80 and 443. Each checkout carries a `devingress.toml`
@@ -179,7 +179,7 @@ env = [".env.local"]             # ${VARS} come from here, then the environment
 
 [[route]]
 host = "web-${slug}"             # ${slug} = the current git branch, slugified
-to = "${WEB_PORT}"               # a bare port means 127.0.0.1:<port>
+to = "${WEB_PORT}"               # a bare port means localhost:<port> (127.0.0.1 or ::1)
 retry = "5s"                     # ride out dev-server restarts instead of 502ing
 
 [[route]]

@@ -70,13 +70,13 @@ strip = true
 		t.Fatalf("want the when-gated route skipped, got %d sites: %+v", len(o.Sites), o.Sites)
 	}
 	web, med := o.Sites[0], o.Sites[1]
-	if web.Host != "web-eng-1-thing.eluve.dev" || web.Upstream != "127.0.0.1:10299" || web.Retry != "5s" {
+	if web.Host != "web-eng-1-thing.eluve.dev" || web.Upstream != "localhost:10299" || web.Retry != "5s" {
 		t.Errorf("web site = %+v", web)
 	}
-	if med.Upstream != "127.0.0.1:10301" {
+	if med.Upstream != "localhost:10301" {
 		t.Errorf("quoted env value not unquoted: %q", med.Upstream)
 	}
-	if !strings.Contains(med.Caddy, "{http.request.header.Origin}") || !strings.Contains(med.Caddy, "reverse_proxy 127.0.0.1:10301") {
+	if !strings.Contains(med.Caddy, "{http.request.header.Origin}") || !strings.Contains(med.Caddy, "reverse_proxy localhost:10301") {
 		t.Errorf("raw caddy should keep Caddy placeholders and expand ${upstream}:\n%s", med.Caddy)
 	}
 	if len(o.Paths) != 1 || o.Paths[0].Prefix != "/supertokens-eng-1-thing" || o.Paths[0].Upstream != "host.docker.internal:3567" {
@@ -132,8 +132,8 @@ to = "${PORT}"
 	route := func(env string) string { return fmt.Sprintf(toml, env) }
 	port := func(t *testing.T, o Owner, want string) {
 		t.Helper()
-		if len(o.Sites) != 1 || o.Sites[0].Upstream != "127.0.0.1:"+want {
-			t.Errorf("sites = %+v, want upstream 127.0.0.1:%s", o.Sites, want)
+		if len(o.Sites) != 1 || o.Sites[0].Upstream != "localhost:"+want {
+			t.Errorf("sites = %+v, want upstream localhost:%s", o.Sites, want)
 		}
 	}
 
@@ -192,16 +192,16 @@ to = "${PORT}"
 
 func TestLoadDefaults(t *testing.T) {
 	cases := map[string]struct{ env, to, want string }{
-		":- unset":         {"", "${X:-5225}", "127.0.0.1:5225"},
-		":- empty":         {"X=\n", "${X:-5225}", "127.0.0.1:5225"},
-		":- set":           {"X=6000\n", "${X:-5225}", "127.0.0.1:6000"},
-		"- unset":          {"", "${X-5225}", "127.0.0.1:5225"},
+		":- unset":         {"", "${X:-5225}", "localhost:5225"},
+		":- empty":         {"X=\n", "${X:-5225}", "localhost:5225"},
+		":- set":           {"X=6000\n", "${X:-5225}", "localhost:6000"},
+		"- unset":          {"", "${X-5225}", "localhost:5225"},
 		"- empty":          {"X=\n", "a${X-5225}", "a"},
-		"- set":            {"X=6000\n", "${X-5225}", "127.0.0.1:6000"},
+		"- set":            {"X=6000\n", "${X-5225}", "localhost:6000"},
 		"default with : /": {"", "${UP:-host.docker.internal:5225}", "host.docker.internal:5225"},
-		"empty default":    {"", "1${X:-}", "127.0.0.1:1"},
-		"jackson unset":    {"", "${JACKSON_PORT:-5225}", "127.0.0.1:5225"},
-		"jackson env file": {"JACKSON_PORT=6000\n", "${JACKSON_PORT:-5225}", "127.0.0.1:6000"},
+		"empty default":    {"", "1${X:-}", "localhost:1"},
+		"jackson unset":    {"", "${JACKSON_PORT:-5225}", "localhost:5225"},
+		"jackson env file": {"JACKSON_PORT=6000\n", "${JACKSON_PORT:-5225}", "localhost:6000"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -237,7 +237,7 @@ to = "1"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(o.Sites) != 2 || o.Sites[0].Host != "ab" || o.Sites[0].Upstream != "127.0.0.1:7000" || o.Sites[1].Host != "c" {
+	if len(o.Sites) != 2 || o.Sites[0].Host != "ab" || o.Sites[0].Upstream != "localhost:7000" || o.Sites[1].Host != "c" {
 		t.Fatalf("sites = %+v", o.Sites)
 	}
 }
@@ -278,7 +278,7 @@ to = "1"
 	}
 	want := `header X-Host "{http.request.host}" "{$HOME}" "{$HOME:fallback}"
 header X-Default "d"
-reverse_proxy 127.0.0.1:1
+reverse_proxy localhost:1
 `
 	if o.Sites[0].Caddy != want {
 		t.Errorf("caddy =\n%s\nwant\n%s", o.Sites[0].Caddy, want)

@@ -240,7 +240,8 @@ func (r resolver) enabled(when string) bool {
 
 var portRe = regexp.MustCompile(`^[0-9]+$`)
 
-// upstream: a bare port means this host; anything else is passed to Caddy as-is.
+// upstream: a bare port means this host, as localhost so the dial tries 127.0.0.1 and ::1 (a dev
+// server such as Vite may listen only on [::1]); anything else is passed to Caddy as-is.
 func (r resolver) upstream(to string) (string, error) {
 	v, err := r.expand(to, nil)
 	if err != nil {
@@ -251,7 +252,7 @@ func (r resolver) upstream(to string) (string, error) {
 	case v == "":
 		return "", fmt.Errorf("required")
 	case portRe.MatchString(v):
-		return "127.0.0.1:" + v, nil
+		return "localhost:" + v, nil
 	}
 	return v, nil
 }

@@ -40,7 +40,7 @@ or the root CA is missing, tell the user to run `devingress dns setup <domain>` 
 5. **Ports**: read them from the env file the project's setup already writes, listed in
    `env = [...]`, with `${VAR:-default}` set to today's default port, so the file works in a
    single checkout now and per worktree once the setup allocates ports. A bare port means
-   `127.0.0.1:<port>`. Do not invent a port-allocation scheme: if the project has none and the user
+   `localhost:<port>`, which tries 127.0.0.1 and ::1. Do not invent a port-allocation scheme: if the project has none and the user
    wants several worktrees running at once, say what is needed and leave it to them.
 6. **Write `devingress.toml`** at the checkout root, to be committed. Use `retry = "5s"` on routes
    to dev servers that restart. For example:

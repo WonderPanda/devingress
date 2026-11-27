@@ -24,8 +24,9 @@ Top-level keys:
   host        string, required
               Host name before ".<domain>" is appended. Served at https://<host>.<domain>.
   to          string, required
-              Upstream. A bare port means 127.0.0.1:<port>; anything else (host:port, a URL) is
-              passed to Caddy's reverse_proxy as written.
+              Upstream. A bare port means localhost:<port>, which tries 127.0.0.1 and ::1, so a dev
+              server listening only on [::1] works; anything else (host:port, a URL) is passed to
+              Caddy's reverse_proxy as written.
   when        string, default "" (always on)
               Register the route only if this expands to 1, true, yes or on (any case). An
               undefined variable here means off, not an error; "${X:-1}" means on unless X says
@@ -80,7 +81,7 @@ Example:
 
   [[route]]
   host = "web-${slug}"             # ${slug} = the current git branch, slugified
-  to = "${WEB_PORT}"               # a bare port means 127.0.0.1:<port>
+  to = "${WEB_PORT}"               # a bare port means localhost:<port>
   retry = "5s"                     # ride out dev-server restarts instead of 502ing
 
   [[route]]
